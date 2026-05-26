@@ -28,7 +28,8 @@ Rust backend:
 
 Solid frontend:
 
-- `features/popup`: popup shell, state transitions, and result rendering.
+- `App.tsx` currently owns the Phase 4 popup shell, state transitions, mock result rendering, and popup actions while the app is still small.
+- `features/popup`: future home for popup shell, state transitions, and result rendering once the current single-file implementation starts duplicating logic.
 - `features/settings`: shortcut, provider, model, and prompt preset settings.
 - `lib/commands`: typed wrappers around Tauri commands.
 - `lib/schema`: shared TypeScript representation of validated result payloads.
@@ -41,10 +42,11 @@ Solid frontend:
 3. User presses the shortcut.
 4. Backend receives the shortcut event and requests selected text from `selection`.
 5. Backend completes selected-text capture before focusing the Lexi popup, so the active target application is not replaced by Lexi.
-6. Popup opens with captured metadata, a loading state for provider work, or an error state.
-7. Backend calls the LLM provider with a structured prompt.
-8. Backend validates the provider response against `schemaVersion`.
-9. Frontend renders result or error state.
+6. Popup opens with a capture, mock-transform loading, result, or error state.
+7. In Phase 4, the frontend renders a validated mock `LexiResultV1` result so the popup can be exercised before provider integration.
+8. In Phase 5, the backend will call the LLM provider with a structured prompt.
+9. Backend validates the provider response against `schemaVersion`.
+10. Frontend renders result or error state.
 
 ## Tauri Boundary
 
@@ -76,6 +78,14 @@ Phase 3 frontend event:
 - Emits `capturing`, `captured`, or `failed` states after the global shortcut fires.
 - The `captured` payload contains only redacted metadata: capture method, optional source process/title, character count, and multiline flag.
 - The selected text remains inside the Rust process for later provider integration and is not emitted to the frontend in Phase 3.
+
+Phase 4 popup state:
+
+- Solid state variants are `idle`, `capturing`, `requesting`, `ready`, and `error`.
+- `captured` events are treated as redacted metadata only and transition into a mock `requesting` state.
+- The frontend validates the mock `LexiResultV1` with `validateLexiResultV1` before rendering the `ready` state.
+- The Phase 4 mock word-study result renders separate Japanese panes for meaning, nuance, usage, and related words to fit the fixed popup window without mixing explanation types.
+- Result actions are copy, retry, close, and settings. Copy writes only the structured mock result text, not captured source text.
 
 Temporary PoC binary:
 

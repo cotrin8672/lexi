@@ -173,6 +173,8 @@ Automated coverage:
 
 Goal: build the first usable surface independent of a real LLM provider.
 
+Implementation status: complete for Phase 4. The Solid frontend now uses the `idle`, `capturing`, `requesting`, `ready`, and `error` states, renders a Japanese mock `LexiResultV1` word-study result after capture metadata arrives, and exposes copy, retry, close, and settings actions from the popup.
+
 Tasks:
 
 - Replace the template UI with a compact popup layout.
@@ -197,6 +199,12 @@ Acceptance criteria:
 - Loading, result, and error states are visually distinct.
 - Long text does not overflow controls or resize the window unexpectedly.
 - The UI works with mock data before provider integration.
+
+Result: Phase 4 keeps raw selected text out of the frontend. The popup transitions from capture metadata to a mock transformation result, validates the mock result with the TypeScript schema guard before rendering, and keeps provider work behind the Phase 5 boundary. The result UI is organized into compact `意味`, `ニュアンス`, `使い分け`, and `関連語` panes so each kind of explanation stays separate and the fixed popup is not dependent on whole-window scrolling for normal content.
+
+Automated coverage:
+
+- Frontend tests assert requesting-state rendering, mock result rendering, error diagnostics, and keyboard-reachable copy action wiring.
 
 ## Phase 5: LLM Provider Adapter
 
