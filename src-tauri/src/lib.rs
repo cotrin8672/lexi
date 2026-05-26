@@ -1,6 +1,7 @@
 pub mod errors;
 pub mod schema;
 pub mod selection;
+pub mod shortcut;
 
 #[tauri::command]
 fn capture_selection_diagnostics() -> selection::SelectionDiagnostics {
@@ -9,9 +10,28 @@ fn capture_selection_diagnostics() -> selection::SelectionDiagnostics {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    tauri::Builder::default()
+    let app = tauri::Builder::default()
+        .manage(shortcut::ShortcutRegistrationState::default())
         .plugin(tauri_plugin_opener::init())
-        .invoke_handler(tauri::generate_handler![capture_selection_diagnostics])
-        .run(tauri::generate_context!())
-        .expect("error while running tauri application");
+        .invoke_handler(tauri::generate_handler![
+            capture_selection_diagnostics,
+            shortcut::get_shortcut_status,
+        ])
+        .setup(shortcut::setup)
+        .on_window_event(|window, event| {
+            if let tauri::WindowEvent::CloseRequested { api, .. } = event {
+                if window.label() == "main" {
+                    let _ = window.hide();
+                    api.prevent_close();
+                }
+            }
+        })
+        .build(tauri::generate_context!())
+        .expect("error while building tauri application");
+
+    app.run(|app_handle, event| {
+        if let tauri::RunEvent::ExitRequested { .. } = event {
+            shortcut::unregister_all(app_handle);
+        }
+    });
 }

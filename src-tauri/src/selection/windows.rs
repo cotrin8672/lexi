@@ -1,6 +1,6 @@
 use crate::selection::{
     error_code, normalize_line_endings, CapturedSelection, SelectionCaptureError,
-    SelectionDiagnostics,
+    SelectionCaptureFailure, SelectionDiagnostics,
 };
 use std::ffi::OsString;
 use std::os::windows::ffi::OsStringExt;
@@ -50,6 +50,10 @@ pub fn capture_selected_text() -> Result<CapturedSelection, SelectionCaptureErro
         .map_err(|failure| failure.error)
 }
 
+pub fn capture_selected_text_with_failure() -> Result<CapturedSelection, SelectionCaptureFailure> {
+    capture_selected_text_with_context().map(|result| result.selection)
+}
+
 pub fn capture_selection_diagnostics() -> SelectionDiagnostics {
     match capture_selected_text_with_context() {
         Ok(result) => {
@@ -78,13 +82,6 @@ pub fn capture_selection_diagnostics() -> SelectionDiagnostics {
 
 struct CaptureSuccess {
     selection: CapturedSelection,
-}
-
-struct CaptureFailure {
-    error: SelectionCaptureError,
-    capture_method: Option<&'static str>,
-    source_process: Option<String>,
-    source_window_title: Option<String>,
 }
 
 struct CaptureContext {
@@ -132,12 +129,12 @@ fn selection_strategies() -> [Box<dyn SelectionStrategy>; 2] {
     ]
 }
 
-fn capture_selected_text_with_context() -> Result<CaptureSuccess, CaptureFailure> {
+fn capture_selected_text_with_context() -> Result<CaptureSuccess, SelectionCaptureFailure> {
     let foreground = foreground_window()?;
     let source_window_title = window_title(foreground);
     let source_process = process_name(foreground);
 
-    let _com = ComApartment::init().map_err(|error| CaptureFailure {
+    let _com = ComApartment::init().map_err(|error| SelectionCaptureFailure {
         error,
         capture_method: None,
         source_process: source_process.clone(),
@@ -145,7 +142,7 @@ fn capture_selected_text_with_context() -> Result<CaptureSuccess, CaptureFailure
     })?;
     let automation: IUIAutomation = unsafe {
         CoCreateInstance(&CUIAutomation, None, CLSCTX_INPROC_SERVER).map_err(|error| {
-            CaptureFailure {
+            SelectionCaptureFailure {
                 error: map_windows_error(error),
                 capture_method: None,
                 source_process: source_process.clone(),
@@ -163,7 +160,7 @@ fn capture_selected_text_with_context() -> Result<CaptureSuccess, CaptureFailure
                 }
                 other => other,
             };
-            CaptureFailure {
+            SelectionCaptureFailure {
                 error,
                 capture_method: None,
                 source_process: source_process.clone(),
@@ -174,7 +171,7 @@ fn capture_selected_text_with_context() -> Result<CaptureSuccess, CaptureFailure
     let foreground_element = unsafe {
         automation
             .ElementFromHandle(foreground)
-            .map_err(|error| CaptureFailure {
+            .map_err(|error| SelectionCaptureFailure {
                 error: map_windows_error(error),
                 capture_method: None,
                 source_process: source_process.clone(),
@@ -202,10 +199,10 @@ fn capture_selected_text_with_context() -> Result<CaptureSuccess, CaptureFailure
     })
 }
 
-fn foreground_window() -> Result<HWND, CaptureFailure> {
+fn foreground_window() -> Result<HWND, SelectionCaptureFailure> {
     let hwnd = unsafe { GetForegroundWindow() };
     if hwnd.0.is_null() {
-        Err(CaptureFailure {
+        Err(SelectionCaptureFailure {
             error: SelectionCaptureError::NoForegroundWindow,
             capture_method: None,
             source_process: None,
@@ -218,8 +215,8 @@ fn foreground_window() -> Result<HWND, CaptureFailure> {
 
 fn run_selection_strategies(
     context: &CaptureContext,
-) -> Result<(&'static str, String), CaptureFailure> {
-    let mut last_failure = CaptureFailure {
+) -> Result<(&'static str, String), SelectionCaptureFailure> {
+    let mut last_failure = SelectionCaptureFailure {
         error: SelectionCaptureError::TextPatternUnavailable,
         capture_method: None,
         source_process: context.source_process.clone(),
@@ -229,7 +226,7 @@ fn run_selection_strategies(
     for strategy in selection_strategies() {
         match strategy.capture(context) {
             Ok(text) if text.is_empty() => {
-                last_failure = CaptureFailure {
+                last_failure = SelectionCaptureFailure {
                     error: SelectionCaptureError::EmptySelection,
                     capture_method: Some(strategy.name()),
                     source_process: context.source_process.clone(),
@@ -238,7 +235,7 @@ fn run_selection_strategies(
             }
             Ok(text) => return Ok((strategy.name(), text)),
             Err(error) => {
-                last_failure = CaptureFailure {
+                last_failure = SelectionCaptureFailure {
                     error,
                     capture_method: Some(strategy.name()),
                     source_process: context.source_process.clone(),

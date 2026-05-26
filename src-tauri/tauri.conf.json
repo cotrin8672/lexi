@@ -3,6 +3,7 @@
   "productName": "lexi",
   "version": "0.1.0",
   "identifier": "io.github.cotrin8672.lexi",
+  "mainBinaryName": "lexi",
   "build": {
     "beforeDevCommand": "pnpm dev",
     "devUrl": "http://localhost:1420",
@@ -13,8 +14,13 @@
     "windows": [
       {
         "title": "lexi",
-        "width": 800,
-        "height": 600
+        "width": 420,
+        "height": 520,
+        "minWidth": 360,
+        "minHeight": 320,
+        "resizable": false,
+        "visible": false,
+        "alwaysOnTop": true
       }
     ],
     "security": {

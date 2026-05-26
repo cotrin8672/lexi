@@ -40,10 +40,11 @@ Solid frontend:
 2. User selects text in another application.
 3. User presses the shortcut.
 4. Backend receives the shortcut event and requests selected text from `selection`.
-5. Popup opens immediately with a capturing or loading state.
-6. Backend calls the LLM provider with a structured prompt.
-7. Backend validates the provider response against `schemaVersion`.
-8. Frontend renders result or error state.
+5. Backend completes selected-text capture before focusing the Lexi popup, so the active target application is not replaced by Lexi.
+6. Popup opens with captured metadata, a loading state for provider work, or an error state.
+7. Backend calls the LLM provider with a structured prompt.
+8. Backend validates the provider response against `schemaVersion`.
+9. Frontend renders result or error state.
 
 ## Tauri Boundary
 
@@ -63,6 +64,19 @@ Temporary PoC command:
 - Returns redacted capture metadata only: success flag, stable code, source process/title when available, character count, and multiline flag.
 - Does not return raw selected text, prompt data, or clipboard contents.
 
+Phase 3 shortcut shell command:
+
+- `get_shortcut_status() -> ShortcutStatus`
+- Returns the configured default shortcut and any startup registration error.
+- Does not register shortcuts from the frontend; registration is backend-owned.
+
+Phase 3 frontend event:
+
+- `lexi:capture`
+- Emits `capturing`, `captured`, or `failed` states after the global shortcut fires.
+- The `captured` payload contains only redacted metadata: capture method, optional source process/title, character count, and multiline flag.
+- The selected text remains inside the Rust process for later provider integration and is not emitted to the frontend in Phase 3.
+
 Temporary PoC binary:
 
 - `capture_selection_poc [delay_ms]`
@@ -73,6 +87,8 @@ Temporary PoC binary:
 Tauri v2 capabilities define which permissions are available to windows/webviews. Keep capabilities scoped to the main window unless additional windows are introduced.
 
 For global shortcuts, the official plugin requires explicit permissions for commands such as register, unregister, and is_registered. Add only the permissions used by the implementation.
+
+The Phase 3 implementation registers the default shortcut from Rust, so the frontend does not receive global-shortcut plugin permissions.
 
 ## Selected Text Capture Strategy
 

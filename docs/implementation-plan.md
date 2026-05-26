@@ -138,6 +138,8 @@ Result: The first AI result contract is `lexi.result.v1` with `mode: "word-study
 
 Goal: wire the explicit user action that starts the capture flow.
 
+Implementation status: complete for Phase 3. The Rust backend registers `Ctrl+Shift+X`, captures from the active app before focusing Lexi, opens a hidden compact popup with redacted capture results, emits capture lifecycle events, and reports startup registration conflicts through `ShortcutRegistrationFailed`.
+
 Tasks:
 
 - Add Tauri global shortcut dependencies:
@@ -145,7 +147,7 @@ Tasks:
   - JS package: `@tauri-apps/plugin-global-shortcut` only if shortcut registration is frontend-owned.
 - Prefer backend-owned registration if it keeps selected-text capture fully native.
 - Add only required permissions to `src-tauri/capabilities/default.json`.
-- Define default shortcut, likely `Ctrl+Shift+L` on Windows unless it conflicts with target apps.
+- Define default shortcut as `Ctrl+Shift+X` on Windows to keep the `Ctrl+Shift+` pattern while avoiding browser `Ctrl+L` selection/focus conflicts.
 - Add shortcut registration, unregister on shutdown, and conflict reporting.
 - Configure a compact popup window:
   - hidden on startup;
@@ -157,9 +159,15 @@ Tasks:
 Acceptance criteria:
 
 - Shortcut conflict shows `ShortcutRegistrationFailed`.
-- Pressing the shortcut opens the popup immediately in a loading or error state.
+- Pressing the shortcut captures from the currently active app before Lexi takes focus, then opens the popup with captured metadata or an error state.
 - App shutdown unregisters shortcuts cleanly.
 - Capabilities list only the used global-shortcut permissions.
+
+Result: Shortcut ownership stays in the Rust backend. Capture runs before Lexi takes focus, and the frontend listens for `lexi:capture` to render captured metadata or error states without receiving raw selected text.
+
+Automated coverage:
+
+- Rust tests assert that `lexi:capture` payload fields serialize with the camelCase names consumed by the frontend.
 
 ## Phase 4: Popup UI
 

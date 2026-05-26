@@ -8,6 +8,14 @@ pub struct CapturedSelection {
     pub capture_method: &'static str,
 }
 
+#[derive(Debug, Clone)]
+pub struct SelectionCaptureFailure {
+    pub error: SelectionCaptureError,
+    pub capture_method: Option<&'static str>,
+    pub source_process: Option<String>,
+    pub source_window_title: Option<String>,
+}
+
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "PascalCase")]
 pub enum SelectionCaptureError {
@@ -36,6 +44,10 @@ pub fn capture_selected_text() -> Result<CapturedSelection, SelectionCaptureErro
     platform::capture_selected_text()
 }
 
+pub fn capture_selected_text_with_failure() -> Result<CapturedSelection, SelectionCaptureFailure> {
+    platform::capture_selected_text_with_failure()
+}
+
 pub fn capture_selection_diagnostics() -> SelectionDiagnostics {
     platform::capture_selection_diagnostics()
 }
@@ -44,7 +56,7 @@ fn normalize_line_endings(text: &str) -> String {
     text.replace("\r\n", "\n").replace('\r', "\n")
 }
 
-fn error_code(error: &SelectionCaptureError) -> &'static str {
+pub(crate) fn error_code(error: &SelectionCaptureError) -> &'static str {
     match error {
         SelectionCaptureError::NoForegroundWindow => "NoForegroundWindow",
         SelectionCaptureError::FocusedElementUnavailable => "FocusedElementUnavailable",
@@ -64,10 +76,23 @@ use windows as platform;
 
 #[cfg(not(windows))]
 mod platform {
-    use super::{error_code, CapturedSelection, SelectionCaptureError, SelectionDiagnostics};
+    use super::{
+        error_code, CapturedSelection, SelectionCaptureError, SelectionCaptureFailure,
+        SelectionDiagnostics,
+    };
 
     pub fn capture_selected_text() -> Result<CapturedSelection, SelectionCaptureError> {
         Err(SelectionCaptureError::SelectionUnsupported)
+    }
+
+    pub fn capture_selected_text_with_failure() -> Result<CapturedSelection, SelectionCaptureFailure>
+    {
+        Err(SelectionCaptureFailure {
+            error: SelectionCaptureError::SelectionUnsupported,
+            capture_method: None,
+            source_process: None,
+            source_window_title: None,
+        })
     }
 
     pub fn capture_selection_diagnostics() -> SelectionDiagnostics {
