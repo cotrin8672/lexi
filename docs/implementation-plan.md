@@ -6,7 +6,7 @@ Status: draft
 
 - Initial release targets Windows desktop only.
 - UI Automation is the primary selected-text capture path until the PoC proves otherwise.
-- The first user workflow is `explain`, matching the current `lexi.result.v1` schema draft.
+- The first user workflow is `word-study`, matching the current `lexi.result.v1` schema draft for English word lookup.
 - Raw selected text should stay in the Rust backend flow and should not be rendered or logged unless a later requirement explicitly adds preview behavior.
 - LLM provider selection is still open, so early implementation should support a mock provider and a narrow provider trait before binding the product to one vendor.
 
@@ -115,11 +115,13 @@ Result: UI Automation remains the primary capture path. Broader app compatibilit
 
 Goal: define stable contracts before UI and provider integration depend on them.
 
+Implementation status: complete for Phase 2. Stable app errors, selection-error mapping, Rust and TypeScript result schemas, and strict `word-study` schema validation are implemented and verified.
+
 Tasks:
 
 - Add `AppError` with stable code, user message, diagnostic message, and retryable flag.
 - Map `SelectionCaptureError` to `AppError`.
-- Add Rust structs for `LexiResultV1`, `Term`, and related schema objects.
+- Add Rust structs for `LexiResultV1`, translations, related words, usage comparisons, and related schema objects.
 - Add strict schema validation for required fields and `schemaVersion`.
 - Mirror result and error types in `src/lib/schema.ts` and `src/lib/errors.ts`.
 - Add unit tests for error mapping and schema validation.
@@ -129,6 +131,8 @@ Acceptance criteria:
 - Frontend can render typed errors and results without inspecting arbitrary JSON.
 - Unknown result schema versions are rejected.
 - Tests cover success and invalid model output paths.
+
+Result: The first AI result contract is `lexi.result.v1` with `mode: "word-study"`. Provider output must include a headword, Japanese translations, nuance, similar words, usage comparisons, antonyms, and warnings, then pass backend validation before the UI renders it.
 
 ## Phase 3: Shortcut and Native Window Shell
 
@@ -194,7 +198,12 @@ Tasks:
 
 - Add `LlmProvider` trait with a minimal method such as `transform(request)`.
 - Keep `MockProvider` as the default until real provider configuration exists.
-- Add prompt builder for the `explain` workflow.
+- Add prompt builder for the first `word-study` workflow:
+  - Japanese translations;
+  - nuance;
+  - similar words;
+  - practical usage differences;
+  - antonyms.
 - Add timeout and retry policy.
 - Parse provider response into `LexiResultV1`.
 - Map provider failures to stable app errors:

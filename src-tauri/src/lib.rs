@@ -1,3 +1,5 @@
+pub mod errors;
+pub mod schema;
 pub mod selection;
 
 #[tauri::command]

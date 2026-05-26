@@ -23,6 +23,7 @@ Rust backend:
 - `llm`: sends typed requests to the configured model provider and validates response shape.
 - `settings`: loads and saves user settings.
 - `errors`: defines stable error codes and user-safe diagnostics.
+- `schema`: defines `LexiResultV1` and rejects missing required fields or unknown schema versions.
 - `commands`: exposes narrow Tauri commands to the frontend.
 
 Solid frontend:
@@ -31,6 +32,7 @@ Solid frontend:
 - `features/settings`: shortcut, provider, model, and prompt preset settings.
 - `lib/commands`: typed wrappers around Tauri commands.
 - `lib/schema`: shared TypeScript representation of validated result payloads.
+- `lib/errors`: shared TypeScript representation of stable app error payloads.
 
 ## Data Flow
 
@@ -95,7 +97,7 @@ Fallback strategies should be decided after PoC evidence. Clipboard simulation i
 
 The backend should own provider calls because it can centralize key handling, redaction, retries, timeout policy, and schema validation.
 
-Provider responses must be parsed into a versioned Rust struct before frontend rendering. The frontend should render validated data, not raw model text.
+Provider responses must be parsed into a versioned Rust struct before frontend rendering. The frontend should render validated data, not raw model text. For the first workflow, the model is expected to return structured word-study data: Japanese translations, nuance, similar words, usage differences, antonyms, and warnings when useful data is unavailable.
 
 ## Security and Privacy
 

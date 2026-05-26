@@ -70,21 +70,41 @@ Out of scope for the first release:
 
 ## LLM Output Schema
 
-Initial schema draft:
+Initial schema draft for the first word-study workflow:
 
 ```json
 {
   "schemaVersion": "lexi.result.v1",
-  "mode": "explain",
+  "mode": "word-study",
   "sourceLanguage": "auto",
   "resultLanguage": "ja",
-  "title": "string",
-  "summary": "string",
-  "points": ["string"],
-  "terms": [
+  "headword": "string",
+  "translations": [
+    {
+      "text": "string",
+      "note": "string or null"
+    }
+  ],
+  "nuance": "string",
+  "synonyms": [
     {
       "term": "string",
-      "meaning": "string"
+      "japanese": "string",
+      "nuance": "string"
+    }
+  ],
+  "usageComparisons": [
+    {
+      "terms": ["string"],
+      "explanation": "string",
+      "examples": ["string"]
+    }
+  ],
+  "antonyms": [
+    {
+      "term": "string",
+      "japanese": "string",
+      "nuance": "string"
     }
   ],
   "warnings": ["string"]
@@ -94,8 +114,11 @@ Initial schema draft:
 Rules:
 
 - `schemaVersion` is required.
-- `title` and `summary` are required for rendering.
-- `points`, `terms`, and `warnings` may be empty arrays.
+- `headword`, `translations`, and `nuance` are required for rendering.
+- `translations` must contain at least one Japanese translation.
+- `synonyms`, `usageComparisons`, `antonyms`, and `warnings` may be empty arrays when the model cannot provide a useful item without guessing.
+- `synonyms` and `antonyms` should include the English term, Japanese meaning, and nuance.
+- `usageComparisons` should explain practical differences between related terms and may include examples.
 - The renderer must reject unknown or missing schema versions instead of guessing.
 
 ## Error Handling
