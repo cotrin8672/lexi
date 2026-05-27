@@ -1,2 +1,13 @@
 node_modules
 dist
+
+# Local dotenv files. Keep examples tracked.
+.env
+.env.*
+!.env.example
+
+# Local provider configuration and API keys.
+provider-api-keys.json
+provider-settings.json
+**/provider-api-keys.json
+**/provider-settings.json

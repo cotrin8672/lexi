@@ -44,6 +44,24 @@ impl AppError {
             true,
         )
     }
+
+    pub fn provider_not_configured(diagnostic_message: impl Into<String>) -> Self {
+        Self::new(
+            AppErrorCode::ProviderNotConfigured,
+            "LLM provider is not configured.",
+            diagnostic_message,
+            false,
+        )
+    }
+
+    pub fn provider_request_failed(diagnostic_message: impl Into<String>, retryable: bool) -> Self {
+        Self::new(
+            AppErrorCode::ProviderRequestFailed,
+            "LLM request failed.",
+            diagnostic_message,
+            retryable,
+        )
+    }
 }
 
 impl From<SelectionCaptureError> for AppError {

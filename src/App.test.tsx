@@ -1,9 +1,40 @@
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { render } from "solid-js/web";
+import { invoke } from "@tauri-apps/api/core";
 import { LEXI_RESULT_V1_SCHEMA_VERSION, type LexiResultV1 } from "./lib/schema";
-import { PopupView, type PopupState } from "./App";
+import App, { PopupView, type PopupState } from "./App";
 
 const noop = () => undefined;
+const tauriMocks = vi.hoisted(() => ({
+  invoke: vi.fn(),
+  listen: vi.fn(),
+  hide: vi.fn(),
+  listeners: {} as Record<string, Array<(event: { payload: unknown }) => void>>,
+}));
+
+vi.mock("@tauri-apps/api/core", () => ({
+  invoke: tauriMocks.invoke,
+}));
+
+vi.mock("@tauri-apps/api/event", () => ({
+  listen: tauriMocks.listen,
+}));
+
+vi.mock("@tauri-apps/api/window", () => ({
+  getCurrentWindow: () => ({ hide: tauriMocks.hide }),
+}));
+
+beforeEach(() => {
+  tauriMocks.invoke.mockReset();
+  tauriMocks.listen.mockReset();
+  tauriMocks.hide.mockReset();
+  tauriMocks.listeners = {};
+  tauriMocks.listen.mockImplementation((event: string, handler: (event: { payload: unknown }) => void) => {
+    tauriMocks.listeners[event] = [...(tauriMocks.listeners[event] ?? []), handler];
+    return Promise.resolve(() => undefined);
+  });
+  document.body.innerHTML = "";
+});
 
 function renderPopup(
   state: PopupState,
@@ -14,13 +45,13 @@ function renderPopup(
     () => (
       <PopupView
         state={state}
-        copyStatus="idle"
         settingsOpen={false}
+        providerSettings={null}
         activeResultTab={activeResultTab}
         onClose={noop}
-        onCopy={noop}
         onRetry={noop}
         onToggleSettings={noop}
+        onSaveSettings={async () => undefined}
         onSetResultTab={noop}
       />
     ),
@@ -39,22 +70,21 @@ function mockResult(): LexiResultV1 {
     translations: [{ text: "微妙な", note: "気づきにくい差を表します。" }],
     nuance: "注意しないと見落とすほど控えめで、露骨ではない感覚があります。",
     synonyms: [
-      { term: "delicate", japanese: "繊細な", nuance: "Fine detail." },
-      { term: "slight", japanese: "わずかな", nuance: "Small amount." },
-    ],
-    usageComparisons: [
       {
-        terms: ["subtle", "slight"],
-        explanation: "subtle は見落としやすさ、slight は量の小ささに焦点があります。",
-        examples: ["There is a subtle difference."],
+        term: "delicate",
+        japanese: "繊細な",
+        nuance: "細部や壊れやすさに焦点があります。",
+        usageComparison:
+          "subtle は気づきにくさ、delicate は細かさや壊れやすさを言う時に使います。",
       },
       {
-        terms: ["subtle", "obvious"],
-        explanation: "obvious は誰でもすぐわかる状態です。",
-        examples: ["That hint was obvious."],
+        term: "slight",
+        japanese: "わずかな",
+        nuance: "量や程度が小さい感じです。",
+        usageComparison:
+          "subtle は読み取りにくさ、slight は単に量が小さいことを言う時に使います。",
       },
     ],
-    antonyms: [{ term: "obvious", japanese: "明らかな", nuance: "Easy to notice." }],
     warnings: ["Mock result."],
   };
 }
@@ -80,7 +110,7 @@ describe("PopupView", () => {
     expect(root.textContent).toContain("42 文字を取得しました");
   });
 
-  it("renders mock LexiResultV1 content and result actions", () => {
+  it("renders LexiResultV1 content without the old bottom actions", () => {
     const state: PopupState = {
       kind: "ready",
       shortcut: "Ctrl+Shift+X",
@@ -105,10 +135,11 @@ describe("PopupView", () => {
     expect(root.textContent).toContain("注意しないと見落とすほど控えめ");
     expect(root.textContent).not.toContain("使い分け");
     expect(root.textContent).toContain("関連語");
-    expect(root.textContent).toContain("コピー");
-    expect(root.textContent).toContain("再試行");
-    expect(root.textContent).toContain("設定");
-    expect(root.textContent).toContain("閉じる");
+    expect(root.querySelector('button[aria-label="設定"]')).toBeInstanceOf(
+      HTMLButtonElement,
+    );
+    expect(root.textContent).not.toContain("コピー");
+    expect(root.textContent).not.toContain("再試行");
   });
 
   it("keeps nuance content next to the headword", () => {
@@ -153,9 +184,39 @@ describe("PopupView", () => {
     );
     expect(root.textContent).toContain("slight");
     expect(root.textContent).toContain("わずかな");
-    expect(root.textContent).toContain("subtle は見落としやすさ");
-    expect(root.textContent).toContain("obvious");
-    expect(root.textContent).not.toContain("obvious は誰でもすぐわかる状態");
+    expect(root.textContent).toContain("使い分け");
+    expect(root.textContent).toContain("subtle は読み取りにくさ");
+    expect(root.textContent).not.toContain("対義語");
+  });
+
+  it("renders partial streaming content before final validation", () => {
+    const state: PopupState = {
+      kind: "streaming",
+      shortcut: "Ctrl+Shift+X",
+      requestId: 7,
+      phase: "streaming",
+      capture: {
+        captureMethod: "uia-foreground-window",
+        sourceProcess: "notepad.exe",
+        sourceWindowTitle: "note.txt - Notepad",
+        characterCount: 42,
+        multiline: true,
+      },
+      partial: {
+        headword: "subtle",
+        translations: [{ text: "微妙な", note: "形容詞" }],
+        nuance: "露骨ではなく、注意して初めて伝わる感じ。",
+        synonyms: [],
+        warnings: [],
+      },
+    };
+
+    const root = renderPopup(state);
+
+    expect(root.textContent).toContain("生成中");
+    expect(root.textContent).toContain("subtle");
+    expect(root.textContent).toContain("微妙な");
+    expect(root.textContent).toContain("露骨ではなく");
   });
 
   it("renders user-safe errors and diagnostics", () => {
@@ -190,8 +251,16 @@ describe("PopupView", () => {
     );
   });
 
-  it("wires copy as a keyboard-reachable button", () => {
-    const onCopy = vi.fn();
+  it("opens provider settings from the header gear", () => {
+    vi.mocked(invoke).mockResolvedValueOnce({
+      provider: "gemini",
+      models: [
+        { id: "gemini-2.5-flash-lite", label: "Gemini 2.5 Flash-Lite" },
+      ],
+      fetched: false,
+      warning: "API key is not configured; showing default models.",
+    });
+    const onSaveSettings = vi.fn(async () => undefined);
     const root = document.createElement("div");
     document.body.appendChild(root);
     const state: PopupState = {
@@ -211,26 +280,197 @@ describe("PopupView", () => {
       () => (
         <PopupView
           state={state}
-          copyStatus="idle"
-          settingsOpen={false}
+          settingsOpen
+          providerSettings={{
+            provider: "gemini",
+            model: "gemini-2.5-flash-lite",
+            resultLanguage: "ja",
+            promptMode: "word-study",
+            apiKeyConfigured: false,
+          }}
           activeResultTab="meaning"
           onClose={noop}
-          onCopy={onCopy}
           onRetry={noop}
           onToggleSettings={noop}
+          onSaveSettings={onSaveSettings}
           onSetResultTab={noop}
         />
       ),
       root,
     );
 
-    const copyButton = Array.from(root.querySelectorAll("button")).find(
-      (button) => button.textContent === "コピー",
+    expect(root.textContent).toContain("Provider");
+    expect(root.textContent).toContain("Gemini");
+    expect(
+      Array.from(root.querySelectorAll("select")).some(
+        (select) => select.value === "gemini-2.5-flash-lite",
+      ),
+    ).toBe(true);
+    expect(
+      Array.from(root.querySelectorAll("select")).some(
+        (select) => select.value === "ja",
+      ),
+    ).toBe(true);
+    expect(invoke).toHaveBeenCalledWith("list_provider_models", {
+      provider: "gemini",
+    });
+
+    root.remove();
+  });
+
+  it("saves the selected model from the dropdown", async () => {
+    vi.mocked(invoke).mockResolvedValueOnce({
+      provider: "gemini",
+      models: [
+        { id: "gemini-2.5-flash-lite", label: "Gemini 2.5 Flash-Lite" },
+        { id: "gemini-2.5-flash", label: "Gemini 2.5 Flash" },
+      ],
+      fetched: true,
+      warning: null,
+    });
+    const onSaveSettings = vi.fn(async () => undefined);
+    const root = document.createElement("div");
+    document.body.appendChild(root);
+    const state: PopupState = {
+      kind: "ready",
+      shortcut: "Ctrl+Shift+X",
+      capture: {
+        captureMethod: "uia-foreground-window",
+        sourceProcess: "notepad.exe",
+        sourceWindowTitle: "note.txt - Notepad",
+        characterCount: 42,
+        multiline: true,
+      },
+      result: mockResult(),
+    };
+
+    render(
+      () => (
+        <PopupView
+          state={state}
+          settingsOpen
+          providerSettings={{
+            provider: "gemini",
+            model: "gemini-2.5-flash-lite",
+            resultLanguage: "ja",
+            promptMode: "word-study",
+            apiKeyConfigured: true,
+          }}
+          activeResultTab="meaning"
+          onClose={noop}
+          onRetry={noop}
+          onToggleSettings={noop}
+          onSaveSettings={onSaveSettings}
+          onSetResultTab={noop}
+        />
+      ),
+      root,
     );
 
-    expect(copyButton).toBeInstanceOf(HTMLButtonElement);
-    copyButton?.click();
-    expect(onCopy).toHaveBeenCalledOnce();
+    await Promise.resolve();
+    const selects = Array.from(root.querySelectorAll("select"));
+    const modelSelect = selects.find((select) =>
+      Array.from(select.options).some((option) => option.value === "gemini-2.5-flash"),
+    );
+    expect(modelSelect).toBeInstanceOf(HTMLSelectElement);
+
+    modelSelect!.value = "gemini-2.5-flash";
+    modelSelect!.dispatchEvent(new Event("change", { bubbles: true }));
+    root.querySelector("form")?.dispatchEvent(
+      new Event("submit", { bubbles: true, cancelable: true }),
+    );
+    await Promise.resolve();
+
+    expect(onSaveSettings).toHaveBeenCalledWith({
+      provider: "gemini",
+      model: "gemini-2.5-flash",
+      resultLanguage: "ja",
+      promptMode: "word-study",
+      apiKey: null,
+    });
+
+    root.remove();
+  });
+});
+
+describe("App stream flow", () => {
+  it("retries through the streaming command instead of the non-stream transform path", async () => {
+    vi.mocked(invoke).mockImplementation((command) => {
+      if (command === "get_provider_settings") {
+        return Promise.resolve({
+          provider: "gemini",
+          model: "gemini-2.5-flash-lite",
+          resultLanguage: "ja",
+          promptMode: "word-study",
+          apiKeyConfigured: true,
+        });
+      }
+      if (command === "get_shortcut_status") {
+        return Promise.resolve({
+          shortcut: "Ctrl+Shift+X",
+          registered: true,
+          registrationError: null,
+        });
+      }
+      if (command === "run_transform_stream") {
+        return Promise.resolve();
+      }
+
+      return Promise.reject(new Error(`unexpected command ${command}`));
+    });
+
+    const root = document.createElement("div");
+    document.body.appendChild(root);
+    render(() => <App />, root);
+    await Promise.resolve();
+    await Promise.resolve();
+
+    tauriMocks.listeners["lexi:transform"][0]({
+      payload: {
+        status: "started",
+        requestId: 42,
+        shortcut: "Ctrl+Shift+X",
+        captureMethod: "uia-foreground-window",
+        sourceProcess: "notepad.exe",
+        sourceWindowTitle: "note.txt - Notepad",
+        characterCount: 6,
+        multiline: false,
+        provider: "gemini",
+        model: "gemini-2.5-flash-lite",
+      },
+    });
+    tauriMocks.listeners["lexi:transform"][0]({
+      payload: {
+        status: "failed",
+        requestId: 42,
+        error: {
+          code: "InvalidModelOutput",
+          userMessage: "結果を表示できませんでした。",
+          diagnosticMessage: "provider stream completed without JSON content",
+          retryable: true,
+        },
+      },
+    });
+
+    const retryButton = Array.from(root.querySelectorAll("button")).find(
+      (button) => button.textContent === "再試行",
+    );
+    expect(retryButton).toBeInstanceOf(HTMLButtonElement);
+    retryButton!.click();
+    await Promise.resolve();
+
+    expect(invoke).toHaveBeenCalledWith("run_transform_stream", {
+      capture: {
+        shortcut: "Ctrl+Shift+X",
+        captureMethod: "uia-foreground-window",
+        sourceProcess: "notepad.exe",
+        sourceWindowTitle: "note.txt - Notepad",
+        characterCount: 6,
+        multiline: false,
+      },
+    });
+    expect(invoke).not.toHaveBeenCalledWith("run_transform");
+
     root.remove();
   });
 });

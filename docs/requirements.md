@@ -17,7 +17,7 @@ In scope:
 - Selected-text acquisition through Windows UI Automation where supported.
 - Compact popup UI for loading, result, copy, retry, and error states.
 - One LLM transformation workflow with a typed output schema.
-- Local settings for shortcut, provider configuration, model name, and prompt preset.
+- Local settings for shortcut, provider configuration, model name, API key state, and prompt preset.
 - Focused logging that excludes selected text and model payloads.
 
 Out of scope for the first release:
@@ -33,19 +33,27 @@ Out of scope for the first release:
 - The app registers a configurable global shortcut on startup.
 - When the shortcut fires, the app attempts to read the current foreground selection.
 - If selected text is available, the app opens a small popup near the active context or at a deterministic fallback position.
-- The app sends the selected text and selected prompt preset to the configured LLM provider.
+- The app sends the selected text and selected prompt preset to the configured LLM provider immediately after backend capture succeeds.
+- The app should consume provider responses as streams where supported and render completed partial fields before the final response is validated.
 - The app validates the response against the expected schema before rendering it.
-- The user can copy the primary result.
-- The user can retry a failed request.
-- The user can open settings from the popup.
+- The default low-cost provider is Gemini, with OpenAI available as the fallback provider when Gemini responses are not stable enough.
+- The user can change provider, model, result language, and API key from the popup settings panel.
+- Model settings are selected from a provider model-list endpoint when an API key is configured, with a small default fallback list when model-list retrieval is unavailable.
+- Result language settings are selected from an embedded dropdown list instead of a free-form text field.
+- The user can open settings from a gear button in the popup header.
+- Result UI actions such as copy and retry are not shown in the bottom action bar.
 - The app shows actionable errors for unsupported selection source, empty selection, shortcut registration failure, provider failure, and schema validation failure.
 
 ## Non-Functional Requirements
 
 - Startup should remain lightweight; avoid eager provider calls.
 - Shortcut-to-popup feedback should feel immediate even when LLM processing is pending.
+- Shortcut-to-request latency should avoid unnecessary frontend command round trips after capture.
 - Raw selected text must not be written to logs.
-- API keys must not be stored in plaintext project files.
+- Raw model stream chunks must not be emitted directly to the frontend.
+- API keys must not be stored in plaintext project files or plaintext app config files.
+- API keys must be read from dotenvx-injected environment variables first, with OS-backed secret storage on Windows as the fallback.
+- API key values must not be returned to the frontend after save; the frontend only receives configured/not-configured state.
 - Failures should be recoverable without restarting the app whenever possible.
 - The UI should be usable with keyboard and pointer.
 - The result schema should be versioned so prompt changes do not silently break rendering.
@@ -63,7 +71,9 @@ Out of scope for the first release:
 
 - First screen is the actual popup/work surface, not a landing page.
 - The popup should have stable dimensions with responsive constraints so loading text, long words, and errors do not resize the shell unexpectedly.
-- Primary actions: copy result, retry, close, settings.
+- Primary result interactions are the meaning/related-word tabs and structured content disclosure.
+- Settings opens from a header gear button, not a bottom action bar.
+- The current result view should not reserve a bottom action row for copy/retry/settings.
 - Avoid persistent instructional text in the main popup.
 - Use compact controls and clear state changes rather than decorative panels.
 - For word-study results, keep the headword, nuance, meanings, and related-word details scannable in the fixed popup without requiring whole-window scrolling.
@@ -91,21 +101,8 @@ Initial schema draft for the first word-study workflow:
     {
       "term": "string",
       "japanese": "string",
-      "nuance": "string"
-    }
-  ],
-  "usageComparisons": [
-    {
-      "terms": ["string"],
-      "explanation": "string",
-      "examples": ["string"]
-    }
-  ],
-  "antonyms": [
-    {
-      "term": "string",
-      "japanese": "string",
-      "nuance": "string"
+      "nuance": "string",
+      "usageComparison": "string"
     }
   ],
   "warnings": ["string"]
@@ -117,9 +114,10 @@ Rules:
 - `schemaVersion` is required.
 - `headword`, `translations`, and `nuance` are required for rendering.
 - `translations` must contain at least one Japanese translation.
-- `synonyms`, `usageComparisons`, `antonyms`, and `warnings` may be empty arrays when the model cannot provide a useful item without guessing.
-- `synonyms` and `antonyms` should include the English term, Japanese meaning, and nuance.
-- `usageComparisons` should explain practical differences between related terms and may include examples.
+- `nuance` should be an intuitive explanation for deciding when the headword is appropriate.
+- `synonyms` should contain near words that help the user learn practical usage distinctions.
+- Each synonym must include the English term, Japanese meaning, the synonym's own nuance, and a direct `usageComparison` sentence against the headword.
+- Antonyms are intentionally omitted from the first word-study result.
 - The renderer must reject unknown or missing schema versions instead of guessing.
 
 ## Error Handling
@@ -170,8 +168,8 @@ Each error should include a stable code, a short user message, and a diagnostic 
 ## Open Questions
 
 - Which exact first workflow should ship: explain, translate, rewrite, or summarize?
-- Which LLM provider and model should be the default?
-- Should API keys use OS keychain storage in the first release?
+- Whether OpenAI should become the default if Gemini structured responses are unstable in daily use.
+- Whether non-Windows builds need equivalent OS keychain implementations in the first release.
 - Should the popup appear near cursor, near selected text when possible, or at a fixed screen edge?
 - Which applications are must-support targets for the first Windows release?
 

@@ -49,6 +49,29 @@ body {
   padding: 12px 14px 10px;
 }
 
+.header-actions {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 8px;
+}
+
+.icon-button {
+  display: grid;
+  width: 34px;
+  height: 34px;
+  min-width: 34px;
+  place-items: center;
+  border: 1px solid rgba(24, 32, 31, 0.13);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.78);
+  color: #22312d;
+  font-size: 1rem;
+  font-weight: 850;
+  line-height: 1;
+  cursor: pointer;
+}
+
 .brand-lockup {
   display: flex;
   align-items: center;
@@ -179,7 +202,7 @@ button:hover {
 .result-layout {
   position: relative;
   display: grid;
-  grid-template-rows: 104px 40px minmax(0, 1fr) 42px;
+  grid-template-rows: 104px 40px minmax(0, 1fr);
   gap: 10px;
   height: 100%;
   min-width: 0;
@@ -207,12 +230,17 @@ button:hover {
 }
 
 .hero-nuance {
+  display: -webkit-box;
   min-width: 0;
+  max-height: 4.4em;
   margin: 0;
   color: #52615d;
   font-size: 0.82rem;
   line-height: 1.45;
+  overflow: hidden;
   overflow-wrap: anywhere;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 3;
 }
 
 .result-tabs {
@@ -279,6 +307,7 @@ button:hover {
   margin: 0;
   color: #34433f;
   font-size: 0.9rem;
+  line-height: 1.42;
 }
 
 .meaning-list {
@@ -323,11 +352,21 @@ button:hover {
   font-size: 0.82rem;
 }
 
+.streaming-line {
+  padding: 8px 10px;
+  border-radius: 7px;
+  background: rgba(45, 118, 106, 0.08);
+  color: #66706c;
+  font-size: 0.84rem;
+  font-weight: 750;
+}
+
 .usage-item {
   display: grid;
   gap: 6px;
   padding-top: 8px;
   border-top: 1px solid rgba(24, 32, 31, 0.1);
+  min-width: 0;
 }
 
 .usage-item h4 {
@@ -351,9 +390,9 @@ button:hover {
   overflow-wrap: anywhere;
 }
 
-.related-columns {
+.related-single {
   display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
+  grid-template-columns: 1fr;
   gap: 12px;
   height: 100%;
   min-width: 0;
@@ -439,20 +478,17 @@ button:hover {
   padding: 0 10px 10px;
 }
 
-.action-bar,
 .error-actions {
   display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
+  grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 8px;
   min-width: 0;
 }
 
 .error-actions {
-  grid-template-columns: repeat(2, minmax(0, 1fr));
   margin-top: 12px;
 }
 
-.action-bar button,
 .error-actions button {
   min-width: 0;
   height: 42px;
@@ -467,44 +503,98 @@ button:hover {
   overflow-wrap: anywhere;
 }
 
-.action-bar .primary-action {
-  border-color: #255f56;
-  background: #2d766a;
-  color: #ffffff;
-}
-
-.action-bar .primary-action:hover {
-  background: #255f56;
-}
-
-.utility-panel {
+.settings-panel {
   position: absolute;
-  right: 0;
-  bottom: 52px;
-  display: grid;
-  gap: 8px;
-  width: min(260px, 100%);
-  padding: 10px 12px;
+  top: 58px;
+  right: 12px;
+  z-index: 5;
+  width: min(330px, calc(100vw - 24px));
+  max-height: calc(100vh - 70px);
+  padding: 14px;
   border: 1px solid rgba(24, 32, 31, 0.1);
   border-radius: 8px;
   background: rgba(255, 255, 255, 0.96);
   box-shadow: 0 16px 42px rgba(24, 32, 31, 0.16);
+  overflow: auto;
 }
 
-.utility-panel p {
+.settings-panel form {
+  display: grid;
+  gap: 10px;
+}
+
+.settings-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.settings-header h2 {
+  font-size: 1rem;
+}
+
+.settings-panel label {
+  display: grid;
+  min-width: 0;
+  gap: 5px;
+}
+
+.settings-panel label span {
+  color: #66706c;
+  font-size: 0.8rem;
+  font-weight: 750;
+}
+
+.settings-panel input,
+.settings-panel select {
+  width: 100%;
+  min-width: 0;
+  height: 34px;
+  border: 1px solid rgba(24, 32, 31, 0.16);
+  border-radius: 7px;
+  background: #ffffff;
+  color: #18201f;
+  font: inherit;
+  font-size: 0.86rem;
+}
+
+.settings-note,
+.settings-error {
   margin: 0;
-  color: #2f443f;
-  font-size: 0.9rem;
+  font-size: 0.78rem;
 }
 
-.utility-panel dl,
+.settings-note {
+  color: #66706c;
+}
+
+.settings-error {
+  color: #7b2e22;
+  font-weight: 800;
+}
+
+.settings-save {
+  height: 38px;
+  border: 1px solid #255f56;
+  border-radius: 8px;
+  background: #2d766a;
+  color: #ffffff;
+  font-weight: 850;
+  cursor: pointer;
+}
+
+.settings-save:disabled {
+  cursor: wait;
+  opacity: 0.7;
+}
+
 .diagnostics {
   display: grid;
   gap: 8px;
   margin: 0;
 }
 
-.utility-panel dl div,
 .diagnostics div {
   display: grid;
   grid-template-columns: 82px minmax(0, 1fr);
@@ -563,12 +653,12 @@ dd {
     grid-template-rows: auto auto;
   }
 
-  .related-columns {
+  .related-single {
     grid-template-columns: 1fr;
   }
 
   .result-layout {
-    grid-template-rows: 128px 40px minmax(0, 1fr) 42px;
+    grid-template-rows: 128px 40px minmax(0, 1fr);
   }
 }
 

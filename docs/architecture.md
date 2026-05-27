@@ -44,9 +44,10 @@ Solid frontend:
 5. Backend completes selected-text capture before focusing the Lexi popup, so the active target application is not replaced by Lexi.
 6. Popup opens with a capture, mock-transform loading, result, or error state.
 7. In Phase 4, the frontend renders a validated mock `LexiResultV1` result so the popup can be exercised before provider integration.
-8. In Phase 5, the backend will call the LLM provider with a structured prompt.
-9. Backend validates the provider response against `schemaVersion`.
-10. Frontend renders result or error state.
+8. In Phase 5, after capture succeeds, the backend immediately starts the configured LLM provider request instead of waiting for a frontend command round trip.
+9. Provider responses are received as streams where supported. Backend accumulates the JSON, extracts completed safe partial fields, and emits progress events for incremental UI rendering.
+10. Backend validates the completed provider response against `schemaVersion`.
+11. Frontend renders partial content while streaming, then swaps to the validated final result or error state.
 
 ## Tauri Boundary
 
@@ -56,6 +57,9 @@ Prefer a small command surface:
 - `update_settings(input: SettingsUpdate) -> Settings`
 - `capture_selection() -> CaptureResult`
 - `run_transform(input: TransformRequest) -> TransformResult`
+- `list_provider_models(provider: ProviderKind) -> ProviderModelsResult`
+- `get_provider_settings() -> ProviderSettingsView`
+- `update_provider_settings(input: ProviderSettingsUpdate) -> ProviderSettingsView`
 - `copy_result(input: CopyRequest) -> CopyResult`
 
 Do not expose broad filesystem, shell, HTTP, or clipboard permissions directly to frontend code unless a specific feature requires them and the capability file is updated deliberately.
@@ -77,7 +81,14 @@ Phase 3 frontend event:
 - `lexi:capture`
 - Emits `capturing`, `captured`, or `failed` states after the global shortcut fires.
 - The `captured` payload contains only redacted metadata: capture method, optional source process/title, character count, and multiline flag.
-- The selected text remains inside the Rust process for later provider integration and is not emitted to the frontend in Phase 3.
+- The selected text remains inside the Rust process and is not emitted to the frontend.
+
+Phase 5 backend transform event:
+
+- `lexi:transform`
+- Emits `started`, `streaming`, `validating`, `ready`, or `failed`.
+- `streaming` and `validating` carry a `LexiPartialResult` extracted from completed JSON fields only: headword, translations, nuance, synonyms, and warnings.
+- Raw selected text, raw prompt bodies, raw model chunks, and API keys are not emitted to the frontend.
 
 Phase 4 popup state:
 
@@ -86,6 +97,7 @@ Phase 4 popup state:
 - The frontend validates the mock `LexiResultV1` with `validateLexiResultV1` before rendering the `ready` state.
 - The Phase 4 mock word-study result renders compact Japanese panes for meaning and related words. Nuance is shown next to the headword, and usage comparisons are folded into expandable related-word rows.
 - Result actions are copy, retry, close, and settings. Copy writes only the structured mock result text, not captured source text.
+- Phase 5 removes the bottom result action bar. Settings opens from a header gear button and exposes provider, provider-backed model dropdown, embedded result-language dropdown, and API key update fields.
 
 Temporary PoC binary:
 
@@ -123,11 +135,22 @@ Fallback strategies should be decided after PoC evidence. Clipboard simulation i
 
 The backend should own provider calls because it can centralize key handling, redaction, retries, timeout policy, and schema validation.
 
-Provider responses must be parsed into a versioned Rust struct before frontend rendering. The frontend should render validated data, not raw model text. For the first workflow, the model is expected to return structured word-study data: Japanese translations, nuance, similar words, usage differences, antonyms, and warnings when useful data is unavailable.
+Initial provider policy:
+
+- Gemini is the default low-cost API provider, using `gemini-2.5-flash-lite`.
+- OpenAI is the fallback API provider, using `gpt-5.4-nano`.
+- Mock remains available for deterministic local verification.
+- Provider selection and model names are user-configurable through settings.
+- Model dropdowns are populated from provider model-list APIs when a key is configured: OpenAI uses `/v1/models`, Gemini uses `v1beta/models`. If listing fails or the key is missing, the backend returns a small default fallback list with a warning.
+- API key values are accepted from the settings UI but are never returned to the frontend after save.
+- Gemini and OpenAI transform calls use provider streaming endpoints where available. Partial JSON is accumulated in Rust, then only completed schema fields are emitted as partial UI state. The final response must still pass strict `LexiResultV1` validation before the app treats it as complete.
+
+Provider responses must be parsed into a versioned Rust struct before frontend rendering. The frontend should render validated data, not raw model text. For the first workflow, the model is expected to return structured word-study data: Japanese translations, an intuitive usage nuance for the headword, near-word synonyms with per-word usage comparisons, and warnings when useful data is unavailable. Antonyms are omitted from the current result contract.
 
 ## Security and Privacy
 
 - Redact raw selected text, prompt bodies, provider responses, and credentials from logs.
+- Store non-secret provider settings separately from API key material. API keys are read from dotenvx-injected environment variables first (`GEMINI_API_KEY`, `GOOGLE_API_KEY`, `OPENAI_API_KEY`), then from Windows Credential Manager. The frontend receives only configured/not-configured state.
 - Keep default CSP non-null before release.
 - Store secrets through an OS-appropriate mechanism when provider configuration is implemented.
 - Avoid remote content in the Tauri webview unless explicitly required.
@@ -143,7 +166,6 @@ Provider responses must be parsed into a versioned Rust struct before frontend r
 
 - Whether selection capture should be triggered entirely from Rust shortcut handlers or through frontend plugin bindings.
 - Whether settings storage should use a Tauri store plugin, a Rust-owned config file, or OS keychain-backed storage for secrets.
-- Whether the first LLM provider should support streaming.
 - Whether popup positioning requires native window APIs beyond the default Tauri window controls.
 
 ## References

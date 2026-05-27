@@ -1,0 +1,29 @@
+[tools]
+node = "24"
+pnpm = "latest"
+"npm:@dotenvx/dotenvx" = "latest"
+
+[tasks.dev]
+description = "Run the Tauri app with secrets loaded from .env via dotenvx"
+run = "dotenvx run -- pnpm tauri dev"
+
+[tasks.frontend]
+description = "Run the Vite frontend with .env loaded via dotenvx"
+run = "dotenvx run -- pnpm dev"
+
+[tasks.build]
+description = "Build the Tauri app with .env loaded via dotenvx"
+run = "dotenvx run -- pnpm tauri build"
+
+[tasks.frontend-build]
+description = "Build the frontend with .env loaded via dotenvx"
+run = "dotenvx run -- pnpm build"
+
+[tasks.test]
+description = "Run frontend tests with .env loaded via dotenvx"
+run = "dotenvx run -- pnpm test"
+
+[tasks.cargo-check]
+description = "Run Rust cargo check with .env loaded via dotenvx"
+run = "dotenvx run -f ../.env -- cargo check"
+dir = "src-tauri"

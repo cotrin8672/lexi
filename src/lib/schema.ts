@@ -9,12 +9,7 @@ export interface RelatedWord {
   term: string;
   japanese: string;
   nuance: string;
-}
-
-export interface UsageComparison {
-  terms: string[];
-  explanation: string;
-  examples: string[];
+  usageComparison: string;
 }
 
 export interface LexiResultV1 {
@@ -26,8 +21,6 @@ export interface LexiResultV1 {
   translations: Translation[];
   nuance: string;
   synonyms: RelatedWord[];
-  usageComparisons: UsageComparison[];
-  antonyms: RelatedWord[];
   warnings: string[];
 }
 
@@ -62,23 +55,15 @@ export function validateLexiResultV1(value: unknown): LexiResultValidation {
     return { ok: false, reason: "translations must be a non-empty array" };
   }
 
-  if (!isRelatedWordArray(value.synonyms)) {
+  if (!isRelatedWordArray(value.synonyms) || value.synonyms.length === 0) {
     return { ok: false, reason: "synonyms must be an array of related words" };
-  }
-
-  if (!isUsageComparisonArray(value.usageComparisons)) {
-    return { ok: false, reason: "usageComparisons must be an array of comparisons" };
-  }
-
-  if (!isRelatedWordArray(value.antonyms)) {
-    return { ok: false, reason: "antonyms must be an array of related words" };
   }
 
   if (!isStringArray(value.warnings)) {
     return { ok: false, reason: "warnings must be an array of strings" };
   }
 
-  return { ok: true, result: value as LexiResultV1 };
+  return { ok: true, result: value as unknown as LexiResultV1 };
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -113,23 +98,8 @@ function isRelatedWordArray(value: unknown): value is RelatedWord[] {
         isRecord(item) &&
         isNonEmptyString(item.term) &&
         isNonEmptyString(item.japanese) &&
-        isNonEmptyString(item.nuance),
-    )
-  );
-}
-
-function isUsageComparisonArray(value: unknown): value is UsageComparison[] {
-  return (
-    Array.isArray(value) &&
-    value.every(
-      (item) =>
-        isRecord(item) &&
-        isStringArray(item.terms) &&
-        item.terms.length > 0 &&
-        item.terms.every(isNonEmptyString) &&
-        isNonEmptyString(item.explanation) &&
-        isStringArray(item.examples) &&
-        item.examples.every(isNonEmptyString),
+        isNonEmptyString(item.nuance) &&
+        isNonEmptyString(item.usageComparison),
     )
   );
 }

@@ -1,4 +1,5 @@
 use crate::errors::{AppError, AppErrorCode};
+use crate::llm::{self, SelectedTextState, TransformCaptureMetadata};
 use crate::selection;
 use serde::Serialize;
 use std::sync::Mutex;
@@ -130,14 +131,41 @@ fn start_capture(app: AppHandle) {
 
     std::thread::spawn(move || {
         let event = match selection::capture_selected_text_with_failure() {
-            Ok(selection) => CaptureEvent::Captured {
-                shortcut: DEFAULT_SHORTCUT_LABEL,
-                capture_method: selection.capture_method,
-                source_process: selection.source_process,
-                source_window_title: selection.source_window_title,
-                character_count: selection.text.chars().count(),
-                multiline: selection.text.contains('\n'),
-            },
+            Ok(selection) => {
+                let character_count = selection.text.chars().count();
+                let multiline = selection.text.contains('\n');
+                let selected_text = selection.text.clone();
+                app.state::<SelectedTextState>().replace(selection.text);
+                let capture_method = selection.capture_method;
+                let source_process = selection.source_process;
+                let source_window_title = selection.source_window_title;
+
+                let event = CaptureEvent::Captured {
+                    shortcut: DEFAULT_SHORTCUT_LABEL,
+                    capture_method,
+                    source_process: source_process.clone(),
+                    source_window_title: source_window_title.clone(),
+                    character_count,
+                    multiline,
+                };
+
+                show_popup(&app);
+                let _ = app.emit(CAPTURE_EVENT, event.clone());
+                llm::start_transform_stream(
+                    app.clone(),
+                    selected_text,
+                    TransformCaptureMetadata {
+                        shortcut: DEFAULT_SHORTCUT_LABEL.to_string(),
+                        capture_method,
+                        source_process,
+                        source_window_title,
+                        character_count,
+                        multiline,
+                    },
+                );
+
+                return;
+            }
             Err(failure) => {
                 let selection_error_code = selection::error_code(&failure.error).to_string();
                 CaptureEvent::Failed {

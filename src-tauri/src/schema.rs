@@ -16,14 +16,7 @@ pub struct RelatedWord {
     pub term: String,
     pub japanese: String,
     pub nuance: String,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct UsageComparison {
-    pub terms: Vec<String>,
-    pub explanation: String,
-    pub examples: Vec<String>,
+    pub usage_comparison: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -37,8 +30,6 @@ pub struct LexiResultV1 {
     pub translations: Vec<Translation>,
     pub nuance: String,
     pub synonyms: Vec<RelatedWord>,
-    pub usage_comparisons: Vec<UsageComparison>,
-    pub antonyms: Vec<RelatedWord>,
     pub warnings: Vec<String>,
 }
 
@@ -56,12 +47,23 @@ impl LexiResultV1 {
         validate_required("resultLanguage", &self.result_language)?;
         validate_required("headword", &self.headword)?;
         validate_required("nuance", &self.nuance)?;
+        validate_max_chars("headword", &self.headword, 48)?;
+        validate_max_chars("nuance", &self.nuance, 120)?;
         validate_non_empty("translations", self.translations.len())?;
+        validate_max_len("translations", self.translations.len(), 3)?;
+        validate_non_empty("synonyms", self.synonyms.len())?;
+        validate_max_len("synonyms", self.synonyms.len(), 4)?;
 
         for (index, translation) in self.translations.iter().enumerate() {
             validate_required(&format!("translations[{index}].text"), &translation.text)?;
+            validate_max_chars(
+                &format!("translations[{index}].text"),
+                &translation.text,
+                48,
+            )?;
             if let Some(note) = &translation.note {
                 validate_required(&format!("translations[{index}].note"), note)?;
+                validate_max_chars(&format!("translations[{index}].note"), note, 16)?;
             }
         }
 
@@ -69,31 +71,9 @@ impl LexiResultV1 {
             validate_related_word(&format!("synonyms[{index}]"), synonym)?;
         }
 
-        for (index, comparison) in self.usage_comparisons.iter().enumerate() {
-            validate_non_empty(
-                &format!("usageComparisons[{index}].terms"),
-                comparison.terms.len(),
-            )?;
-            for (term_index, term) in comparison.terms.iter().enumerate() {
-                validate_required(
-                    &format!("usageComparisons[{index}].terms[{term_index}]"),
-                    term,
-                )?;
-            }
-            validate_required(
-                &format!("usageComparisons[{index}].explanation"),
-                &comparison.explanation,
-            )?;
-            for (example_index, example) in comparison.examples.iter().enumerate() {
-                validate_required(
-                    &format!("usageComparisons[{index}].examples[{example_index}]"),
-                    example,
-                )?;
-            }
-        }
-
-        for (index, antonym) in self.antonyms.iter().enumerate() {
-            validate_related_word(&format!("antonyms[{index}]"), antonym)?;
+        for (index, warning) in self.warnings.iter().enumerate() {
+            validate_required(&format!("warnings[{index}]"), warning)?;
+            validate_max_chars(&format!("warnings[{index}]"), warning, 120)?;
         }
 
         Ok(self)
@@ -128,10 +108,40 @@ fn validate_non_empty(field: &str, len: usize) -> Result<(), AppError> {
     Ok(())
 }
 
+fn validate_max_len(field: &str, len: usize, max: usize) -> Result<(), AppError> {
+    if len > max {
+        return Err(AppError::invalid_model_output(format!(
+            "field '{field}' has {len} items, max is {max}"
+        )));
+    }
+
+    Ok(())
+}
+
+fn validate_max_chars(field: &str, value: &str, max: usize) -> Result<(), AppError> {
+    let count = value.chars().count();
+    if count > max {
+        return Err(AppError::invalid_model_output(format!(
+            "field '{field}' has {count} characters, max is {max}"
+        )));
+    }
+
+    Ok(())
+}
+
 fn validate_related_word(field: &str, value: &RelatedWord) -> Result<(), AppError> {
     validate_required(&format!("{field}.term"), &value.term)?;
     validate_required(&format!("{field}.japanese"), &value.japanese)?;
     validate_required(&format!("{field}.nuance"), &value.nuance)?;
+    validate_required(&format!("{field}.usageComparison"), &value.usage_comparison)?;
+    validate_max_chars(&format!("{field}.term"), &value.term, 48)?;
+    validate_max_chars(&format!("{field}.japanese"), &value.japanese, 48)?;
+    validate_max_chars(&format!("{field}.nuance"), &value.nuance, 80)?;
+    validate_max_chars(
+        &format!("{field}.usageComparison"),
+        &value.usage_comparison,
+        140,
+    )?;
 
     Ok(())
 }
@@ -150,25 +160,15 @@ mod tests {
             headword: "subtle".to_string(),
             translations: vec![super::Translation {
                 text: "微妙な".to_string(),
-                note: Some("文脈により肯定的にも否定的にも使われる".to_string()),
+                note: Some("形容詞".to_string()),
             }],
             nuance: "Small or delicate enough that it may be hard to notice.".to_string(),
             synonyms: vec![super::RelatedWord {
                 term: "delicate".to_string(),
                 japanese: "繊細な".to_string(),
                 nuance: "Sensitivity or fine detail is emphasized.".to_string(),
-            }],
-            usage_comparisons: vec![super::UsageComparison {
-                terms: vec!["subtle".to_string(), "slight".to_string()],
-                explanation:
-                    "subtle implies hard-to-notice nuance; slight mainly means small in amount."
-                        .to_string(),
-                examples: vec!["There is a subtle difference.".to_string()],
-            }],
-            antonyms: vec![super::RelatedWord {
-                term: "obvious".to_string(),
-                japanese: "明らかな".to_string(),
-                nuance: "Easy to notice or understand.".to_string(),
+                usage_comparison: "subtle は気づきにくさ、delicate は細部や壊れやすさに焦点。"
+                    .to_string(),
             }],
             warnings: vec![],
         }
@@ -204,8 +204,6 @@ mod tests {
             "translations": [{"text": "微妙な", "note": null}],
             "nuance": "Small or delicate enough that it may be hard to notice.",
             "synonyms": [],
-            "usageComparisons": [],
-            "antonyms": [],
             "warnings": []
         }"#;
 
@@ -236,5 +234,29 @@ mod tests {
 
         assert_eq!(error.code, AppErrorCode::InvalidModelOutput);
         assert!(error.diagnostic_message.contains("translations"));
+    }
+
+    #[test]
+    fn rejects_overlong_nuance_for_popup_layout() {
+        let mut result = valid_result();
+        result.nuance = "a".repeat(121);
+
+        let error = result.validate().expect_err("overlong nuance should fail");
+
+        assert_eq!(error.code, AppErrorCode::InvalidModelOutput);
+        assert!(error.diagnostic_message.contains("nuance"));
+    }
+
+    #[test]
+    fn rejects_synonym_without_usage_comparison() {
+        let mut result = valid_result();
+        result.synonyms[0].usage_comparison = " ".to_string();
+
+        let error = result
+            .validate()
+            .expect_err("synonym should explain usage difference");
+
+        assert_eq!(error.code, AppErrorCode::InvalidModelOutput);
+        assert!(error.diagnostic_message.contains("usageComparison"));
     }
 }

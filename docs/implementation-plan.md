@@ -121,7 +121,7 @@ Tasks:
 
 - Add `AppError` with stable code, user message, diagnostic message, and retryable flag.
 - Map `SelectionCaptureError` to `AppError`.
-- Add Rust structs for `LexiResultV1`, translations, related words, usage comparisons, and related schema objects.
+- Add Rust structs for `LexiResultV1`, translations, synonyms, and per-synonym usage comparisons.
 - Add strict schema validation for required fields and `schemaVersion`.
 - Mirror result and error types in `src/lib/schema.ts` and `src/lib/errors.ts`.
 - Add unit tests for error mapping and schema validation.
@@ -132,7 +132,7 @@ Acceptance criteria:
 - Unknown result schema versions are rejected.
 - Tests cover success and invalid model output paths.
 
-Result: The first AI result contract is `lexi.result.v1` with `mode: "word-study"`. Provider output must include a headword, Japanese translations, nuance, similar words, usage comparisons, antonyms, and warnings, then pass backend validation before the UI renders it.
+Result: The first AI result contract is `lexi.result.v1` with `mode: "word-study"`. Provider output must include a headword, Japanese translations, an intuitive usage nuance, near-word synonyms with a direct usage comparison for each synonym, and warnings, then pass backend validation before the UI renders it. Antonyms are intentionally omitted.
 
 ## Phase 3: Shortcut and Native Window Shell
 
@@ -213,14 +213,15 @@ Goal: convert captured text into validated `LexiResultV1`.
 Tasks:
 
 - Add `LlmProvider` trait with a minimal method such as `transform(request)`.
-- Keep `MockProvider` as the default until real provider configuration exists.
+- Keep `MockProvider` available for deterministic local verification.
+- Add Gemini and OpenAI API adapters, with Gemini as the low-cost default and OpenAI as the fallback provider.
 - Add prompt builder for the first `word-study` workflow:
   - Japanese translations;
-  - nuance;
-  - similar words;
-  - practical usage differences;
-  - antonyms.
+  - intuitive headword nuance;
+  - near-word synonyms;
+  - practical usage difference for each synonym.
 - Add timeout and retry policy.
+- Use provider streaming endpoints where supported and emit partial result events from completed JSON fields.
 - Parse provider response into `LexiResultV1`.
 - Map provider failures to stable app errors:
   - not configured;
@@ -228,13 +229,19 @@ Tasks:
   - rate limited;
   - invalid output.
 - Add redaction helpers so selected text, prompts, responses, and credentials are never logged raw.
+- Add provider settings commands so the popup can change provider, model, result language, and API key state without returning API key values to the frontend.
+- Populate model dropdowns from provider model-list endpoints, with default fallback options when model listing is unavailable.
+- Remove the result-view bottom action bar and open settings from a header gear button.
 
 Acceptance criteria:
 
 - The UI can run the full path with `MockProvider`.
+- The UI can switch between Gemini and OpenAI settings.
 - Invalid provider output becomes `InvalidModelOutput`.
 - Provider payloads are not logged.
-- Real provider integration can be added behind the same trait after provider choice is settled.
+- Additional provider integrations can be added behind the same command/provider boundary.
+
+Result: Phase 5 adds a backend `llm` module with a `LlmProvider` trait, a deterministic `MockProvider`, structured `word-study` prompt/schema builders, and Gemini/OpenAI API calls behind `run_transform`. Captured text remains in Rust state and is not emitted to the frontend. Shortcut capture success now starts the provider request immediately in Rust, emits `lexi:transform` stream events, and lets the UI render completed partial fields before final validation. Provider settings default to Gemini `gemini-2.5-flash-lite`, expose OpenAI `gpt-5.4-nano` as the fallback option, and return only API-key configured state to the UI. API keys are read from dotenvx-injected environment variables first, then Windows Credential Manager, and are never stored in plaintext app config files. Model dropdowns are populated through provider model-list endpoints when available, with backend fallback lists otherwise. The popup now opens settings from a header gear button and removes the old result bottom action bar.
 
 ## Phase 6: Settings and Secret Handling
 
@@ -357,8 +364,6 @@ Manual tests:
 
 - First workflow: keep `explain` or switch to translate, summarize, or rewrite.
 - Default provider and model.
-- Whether streaming output is required for the first release.
-- API key storage approach for the first release.
 - Default shortcut.
 - Popup placement rule: cursor, active window center, selected-text vicinity when available, or fixed screen edge.
 - Must-support Windows applications for the UI Automation PoC.

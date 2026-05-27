@@ -12,9 +12,9 @@ import { listen } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import type { AppError } from "./lib/errors";
 import {
-  LEXI_RESULT_V1_SCHEMA_VERSION,
   type LexiResultV1,
-  validateLexiResultV1,
+  type RelatedWord,
+  type Translation,
 } from "./lib/schema";
 import "./App.css";
 
@@ -62,12 +62,109 @@ type PopupErrorContext = {
 };
 
 type ResultTab = "meaning" | "related";
-type CopyStatus = "idle" | "copied" | "failed";
+
+type ProviderKind = "mock" | "gemini" | "open-ai";
+
+type ProviderSettings = {
+  provider: ProviderKind;
+  model: string;
+  resultLanguage: string;
+  promptMode: string;
+  apiKeyConfigured: boolean;
+};
+
+type ProviderSettingsUpdate = {
+  provider: ProviderKind;
+  model: string;
+  resultLanguage: string;
+  promptMode: string;
+  apiKey: string | null;
+};
+
+type LexiPartialResult = {
+  headword: string | null;
+  translations: Translation[];
+  nuance: string | null;
+  synonyms: RelatedWord[];
+  warnings: string[];
+};
+
+type ResultLike = {
+  headword?: string | null;
+  translations: Translation[];
+  nuance?: string | null;
+  synonyms: RelatedWord[];
+  warnings: string[];
+};
+
+type TransformEvent =
+  | {
+      status: "started";
+      requestId: number;
+      shortcut: string;
+      captureMethod: string;
+      sourceProcess: string | null;
+      sourceWindowTitle: string | null;
+      characterCount: number;
+      multiline: boolean;
+      provider: ProviderKind;
+      model: string;
+    }
+  | { status: "streaming"; requestId: number; partial: LexiPartialResult }
+  | { status: "validating"; requestId: number; partial: LexiPartialResult }
+  | {
+      status: "ready";
+      requestId: number;
+      result: LexiResultV1;
+      provider: ProviderKind;
+      model: string;
+    }
+  | { status: "failed"; requestId: number; error: AppError };
+
+type ProviderModel = {
+  id: string;
+  label: string;
+};
+
+type ProviderModelsResult = {
+  provider: ProviderKind;
+  models: ProviderModel[];
+  fetched: boolean;
+  warning: string | null;
+};
+
+const FALLBACK_MODEL_OPTIONS: Record<ProviderKind, ProviderModel[]> = {
+  gemini: [
+    { id: "gemini-2.5-flash-lite", label: "Gemini 2.5 Flash-Lite" },
+    { id: "gemini-2.5-flash", label: "Gemini 2.5 Flash" },
+  ],
+  "open-ai": [
+    { id: "gpt-5.4-nano", label: "GPT-5.4 nano" },
+    { id: "gpt-5-nano", label: "GPT-5 nano" },
+    { id: "gpt-5.4-mini", label: "GPT-5.4 mini" },
+  ],
+  mock: [{ id: "mock-word-study", label: "Mock word-study" }],
+};
+
+const RESULT_LANGUAGE_OPTIONS = [
+  { value: "ja", label: "日本語" },
+  { value: "en", label: "English" },
+  { value: "ko", label: "한국어" },
+  { value: "zh", label: "中文" },
+] as const;
 
 export type PopupState =
   | { kind: "idle"; shortcut: string }
   | { kind: "capturing"; shortcut: string }
   | { kind: "requesting"; shortcut: string; capture: CaptureMetadata }
+  | {
+      kind: "streaming";
+      shortcut: string;
+      capture: CaptureMetadata;
+      requestId: number;
+      partial: LexiPartialResult;
+      phase: "requesting" | "streaming" | "validating";
+    }
   | {
       kind: "ready";
       shortcut: string;
@@ -81,132 +178,48 @@ export type PopupState =
       context: PopupErrorContext;
     };
 
-const MOCK_RESULT: LexiResultV1 = {
-  schemaVersion: LEXI_RESULT_V1_SCHEMA_VERSION,
-  mode: "word-study",
-  sourceLanguage: "en",
-  resultLanguage: "ja",
-  headword: "subtle",
-  translations: [
-    {
-      text: "微妙な",
-      note: "形容詞",
-    },
-    {
-      text: "それとなく",
-      note: "副詞的",
-    },
-    {
-      text: "繊細な",
-      note: "形容詞",
-    },
-  ],
-  nuance:
-    "注意しないと見落とすほど控えめで、露骨ではない感覚があります。強く主張せず、読み取る側の観察力や文脈理解が少し必要です。",
-  synonyms: [
-    {
-      term: "delicate",
-      japanese: "繊細な",
-      nuance: "細部の美しさ、壊れやすさ、扱いの慎重さに焦点があります。",
-    },
-    {
-      term: "slight",
-      japanese: "わずかな",
-      nuance:
-        "単に量や程度が小さいことを表します。気づきにくさは必ずしも含みません。",
-    },
-    {
-      term: "implicit",
-      japanese: "暗黙の",
-      nuance: "はっきり言わないが、文脈から読み取れる意味に焦点があります。",
-    },
-  ],
-  usageComparisons: [
-    {
-      terms: ["subtle", "slight"],
-      explanation:
-        "slight は量の小ささ。subtle は小ささに加えて、見落としやすい・読み取る必要がある感じ。",
-      examples: [
-        "a subtle difference = 注意しないとわからない違い",
-        "a slight difference = わずかな違い",
-      ],
-    },
-    {
-      terms: ["subtle", "obvious"],
-      explanation:
-        "obvious は誰でもすぐわかる状態。subtle は逆に、露骨ではなく控えめに現れる状態。",
-      examples: [
-        "a subtle hint = それとなく出したヒント",
-        "an obvious hint = 明らかなヒント",
-      ],
-    },
-  ],
-  antonyms: [
-    {
-      term: "obvious",
-      japanese: "明らかな",
-      nuance: "見ればすぐわかる、説明がほぼ不要な状態。",
-    },
-    {
-      term: "blunt",
-      japanese: "率直すぎる",
-      nuance: "遠回しではなく、柔らかさや含みが少ない言い方。",
-    },
-  ],
-  warnings: ["Phase 4 の mock 結果です。選択語の反映は Phase 5 で接続します。"],
-};
-
 function App() {
   const [state, setState] = createSignal<PopupState>({
     kind: "idle",
     shortcut: "Ctrl+Shift+X",
   });
-  const [copyStatus, setCopyStatus] = createSignal<CopyStatus>("idle");
   const [settingsOpen, setSettingsOpen] = createSignal(false);
+  const [providerSettings, setProviderSettings] =
+    createSignal<ProviderSettings | null>(null);
   const [activeResultTab, setActiveResultTab] =
     createSignal<ResultTab>("meaning");
-  let mockRequestTimer: number | undefined;
+  let activeRequestId: number | null = null;
 
-  function clearMockRequest() {
-    if (mockRequestTimer !== undefined) {
-      window.clearTimeout(mockRequestTimer);
-      mockRequestTimer = undefined;
-    }
-  }
-
-  function startMockRequest(shortcut: string, capture: CaptureMetadata) {
-    clearMockRequest();
-    setCopyStatus("idle");
+  async function startTransform(shortcut: string, capture: CaptureMetadata) {
     setSettingsOpen(false);
     setActiveResultTab("meaning");
     setState({ kind: "requesting", shortcut, capture });
 
-    mockRequestTimer = window.setTimeout(() => {
-      const validation = validateLexiResultV1(MOCK_RESULT);
-
-      if (!validation.ok) {
-        setState({
-          kind: "error",
+    try {
+      await invoke("run_transform_stream", {
+        capture: {
           shortcut,
-          error: {
-            code: "InvalidModelOutput",
-            userMessage: "結果を表示できませんでした。",
-            diagnosticMessage: validation.reason,
-            retryable: true,
-          },
-          context: {
-            selectionErrorCode: "InvalidModelOutput",
-            captureMethod: capture.captureMethod,
-            sourceProcess: capture.sourceProcess,
-            sourceWindowTitle: capture.sourceWindowTitle,
-            retryCapture: capture,
-          },
-        });
-        return;
-      }
-
-      setState({ kind: "ready", shortcut, capture, result: validation.result });
-    }, 280);
+          captureMethod: capture.captureMethod,
+          sourceProcess: capture.sourceProcess,
+          sourceWindowTitle: capture.sourceWindowTitle,
+          characterCount: capture.characterCount,
+          multiline: capture.multiline,
+        },
+      });
+    } catch (error) {
+      setState({
+        kind: "error",
+        shortcut,
+        error: normalizeAppError(error),
+        context: {
+          selectionErrorCode: "TransformFailed",
+          captureMethod: capture.captureMethod,
+          sourceProcess: capture.sourceProcess,
+          sourceWindowTitle: capture.sourceWindowTitle,
+          retryCapture: capture,
+        },
+      });
+    }
   }
 
   async function closePopup() {
@@ -217,13 +230,13 @@ function App() {
     const current = state();
 
     if (current.kind === "ready" || current.kind === "requesting") {
-      startMockRequest(current.shortcut, current.capture);
+      void startTransform(current.shortcut, current.capture);
       return;
     }
 
     if (current.kind === "error") {
       if (current.context.retryCapture) {
-        startMockRequest(current.shortcut, current.context.retryCapture);
+        void startTransform(current.shortcut, current.context.retryCapture);
         return;
       }
 
@@ -233,25 +246,11 @@ function App() {
     }
   }
 
-  async function copyCurrentResult() {
-    const current = state();
-
-    if (current.kind !== "ready") {
-      return;
-    }
-
-    try {
-      await navigator.clipboard.writeText(
-        formatResultForClipboard(current.result),
-      );
-      setCopyStatus("copied");
-    } catch {
-      setCopyStatus("failed");
-    }
-  }
-
   onMount(() => {
-    let cleanup: (() => void) | undefined;
+    let cleanupCapture: (() => void) | undefined;
+    let cleanupTransform: (() => void) | undefined;
+
+    void invoke<ProviderSettings>("get_provider_settings").then(setProviderSettings);
 
     void invoke<ShortcutStatus>("get_shortcut_status").then((status) => {
       if (status.registrationError) {
@@ -277,26 +276,27 @@ function App() {
       const payload = event.payload;
 
       if (payload.status === "capturing") {
-        clearMockRequest();
-        setCopyStatus("idle");
         setSettingsOpen(false);
         setState({ kind: "capturing", shortcut: payload.shortcut });
         return;
       }
 
       if (payload.status === "captured") {
-        startMockRequest(payload.shortcut, {
-          captureMethod: payload.captureMethod,
-          sourceProcess: payload.sourceProcess,
-          sourceWindowTitle: payload.sourceWindowTitle,
-          characterCount: payload.characterCount,
-          multiline: payload.multiline,
+        setState({
+          kind: "requesting",
+          shortcut: payload.shortcut,
+          capture: {
+            captureMethod: payload.captureMethod,
+            sourceProcess: payload.sourceProcess,
+            sourceWindowTitle: payload.sourceWindowTitle,
+            characterCount: payload.characterCount,
+            multiline: payload.multiline,
+          },
         });
         return;
       }
 
-      clearMockRequest();
-      setCopyStatus("idle");
+      activeRequestId = null;
       setSettingsOpen(false);
       setState({
         kind: "error",
@@ -311,7 +311,95 @@ function App() {
         },
       });
     }).then((unlisten) => {
-      cleanup = unlisten;
+      cleanupCapture = unlisten;
+    });
+
+    void listen<TransformEvent>("lexi:transform", (event) => {
+      const payload = event.payload;
+
+      if (payload.status === "started") {
+        activeRequestId = payload.requestId;
+        setSettingsOpen(false);
+        setActiveResultTab("meaning");
+        setState({
+          kind: "streaming",
+          shortcut: payload.shortcut,
+          requestId: payload.requestId,
+          capture: {
+            captureMethod: payload.captureMethod,
+            sourceProcess: payload.sourceProcess,
+            sourceWindowTitle: payload.sourceWindowTitle,
+            characterCount: payload.characterCount,
+            multiline: payload.multiline,
+          },
+          partial: emptyPartialResult(),
+          phase: "requesting",
+        });
+        return;
+      }
+
+      if (activeRequestId !== payload.requestId) {
+        return;
+      }
+
+      const current = state();
+      const fallbackCapture =
+        current.kind === "requesting" ||
+        current.kind === "streaming" ||
+        current.kind === "ready"
+          ? current.capture
+          : null;
+
+      if (payload.status === "streaming" || payload.status === "validating") {
+        if (!fallbackCapture) {
+          return;
+        }
+        setState({
+          kind: "streaming",
+          shortcut: current.shortcut,
+          requestId: payload.requestId,
+          capture: fallbackCapture,
+          partial: payload.partial,
+          phase: payload.status,
+        });
+        return;
+      }
+
+      if (payload.status === "ready") {
+        if (!fallbackCapture) {
+          return;
+        }
+        activeRequestId = null;
+        setState({
+          kind: "ready",
+          shortcut: current.shortcut,
+          capture: fallbackCapture,
+          result: payload.result,
+        });
+        return;
+      }
+
+      if (payload.status === "failed") {
+        activeRequestId = null;
+        const capture =
+          current.kind === "requesting" || current.kind === "streaming"
+            ? current.capture
+            : null;
+        setState({
+          kind: "error",
+          shortcut: current.shortcut,
+          error: payload.error,
+          context: {
+            selectionErrorCode: payload.error.code,
+            captureMethod: capture?.captureMethod ?? null,
+            sourceProcess: capture?.sourceProcess ?? null,
+            sourceWindowTitle: capture?.sourceWindowTitle ?? null,
+            retryCapture: capture,
+          },
+        });
+      }
+    }).then((unlisten) => {
+      cleanupTransform = unlisten;
     });
 
     const keyHandler = (event: KeyboardEvent) => {
@@ -339,8 +427,8 @@ function App() {
     window.addEventListener("keydown", keyHandler);
 
     onCleanup(() => {
-      cleanup?.();
-      clearMockRequest();
+      cleanupCapture?.();
+      cleanupTransform?.();
       window.removeEventListener("keydown", keyHandler);
     });
   });
@@ -348,13 +436,19 @@ function App() {
   return (
     <PopupView
       state={state()}
-      copyStatus={copyStatus()}
       settingsOpen={settingsOpen()}
+      providerSettings={providerSettings()}
       activeResultTab={activeResultTab()}
       onClose={closePopup}
-      onCopy={copyCurrentResult}
       onRetry={retryCurrent}
       onToggleSettings={() => setSettingsOpen((open) => !open)}
+      onSaveSettings={async (update) => {
+        const saved = await invoke<ProviderSettings>("update_provider_settings", {
+          update,
+        });
+        setProviderSettings(saved);
+        setSettingsOpen(false);
+      }}
       onSetResultTab={setActiveResultTab}
     />
   );
@@ -362,13 +456,13 @@ function App() {
 
 export function PopupView(props: {
   state: PopupState;
-  copyStatus: CopyStatus;
   settingsOpen: boolean;
+  providerSettings: ProviderSettings | null;
   activeResultTab: ResultTab;
   onClose: () => void;
-  onCopy: () => void;
   onRetry: () => void;
   onToggleSettings: () => void;
+  onSaveSettings: (update: ProviderSettingsUpdate) => Promise<void>;
   onSetResultTab: (tab: ResultTab) => void;
 }) {
   return (
@@ -382,6 +476,18 @@ export function PopupView(props: {
             <p class="eyebrow">Lexi</p>
             <h1>{titleForState(props.state)}</h1>
           </div>
+        </div>
+        <div class="header-actions">
+          <button
+            class="icon-button"
+            type="button"
+            aria-label="設定"
+            aria-expanded={props.settingsOpen}
+            onClick={props.onToggleSettings}
+            title="設定"
+          >
+            ⚙
+          </button>
         </div>
       </header>
 
@@ -407,17 +513,21 @@ export function PopupView(props: {
             )}
           </Match>
 
+          <Match when={streamingState(props.state)}>
+            {(streaming) => (
+              <StreamingResultView
+                state={streaming()}
+                activeResultTab={props.activeResultTab}
+                onSetResultTab={props.onSetResultTab}
+              />
+            )}
+          </Match>
+
           <Match when={readyState(props.state)}>
             {(ready) => (
               <ResultView
                 state={ready()}
-                copyStatus={props.copyStatus}
-                settingsOpen={props.settingsOpen}
                 activeResultTab={props.activeResultTab}
-                onCopy={props.onCopy}
-                onRetry={props.onRetry}
-                onClose={props.onClose}
-                onToggleSettings={props.onToggleSettings}
                 onSetResultTab={props.onSetResultTab}
               />
             )}
@@ -434,6 +544,15 @@ export function PopupView(props: {
           </Match>
         </Switch>
       </section>
+      <Show when={props.settingsOpen && props.providerSettings}>
+        {(settings) => (
+          <SettingsPanel
+            settings={settings()}
+            onSave={props.onSaveSettings}
+            onClose={props.onToggleSettings}
+          />
+        )}
+      </Show>
     </main>
   );
 }
@@ -460,15 +579,194 @@ function ProgressState(props: { title: string; detail: string }) {
   );
 }
 
+function SettingsPanel(props: {
+  settings: ProviderSettings;
+  onSave: (update: ProviderSettingsUpdate) => Promise<void>;
+  onClose: () => void;
+}) {
+  const [provider, setProvider] = createSignal<ProviderKind>(
+    props.settings.provider,
+  );
+  const [model, setModel] = createSignal(props.settings.model);
+  const [resultLanguage, setResultLanguage] = createSignal(
+    props.settings.resultLanguage,
+  );
+  const [apiKey, setApiKey] = createSignal("");
+  const [models, setModels] = createSignal<ProviderModel[]>(
+    ensureSelectedModel(
+      FALLBACK_MODEL_OPTIONS[props.settings.provider],
+      props.settings.model,
+    ),
+  );
+  const [modelsLoading, setModelsLoading] = createSignal(false);
+  const [modelsWarning, setModelsWarning] = createSignal<string | null>(null);
+  const [saving, setSaving] = createSignal(false);
+  const [error, setError] = createSignal<string | null>(null);
+  let modelLoadSequence = 0;
+
+  const defaultModel = (kind: ProviderKind) => FALLBACK_MODEL_OPTIONS[kind][0].id;
+
+  async function loadModels(nextProvider: ProviderKind, selectedModel: string) {
+    const sequence = ++modelLoadSequence;
+    setModelsLoading(true);
+    setModelsWarning(null);
+
+    try {
+      const result = await invoke<ProviderModelsResult>("list_provider_models", {
+        provider: nextProvider,
+      });
+      const nextModels = ensureSelectedModel(
+        result.models.length > 0
+          ? result.models
+          : FALLBACK_MODEL_OPTIONS[nextProvider],
+        selectedModel,
+      );
+      if (sequence !== modelLoadSequence || provider() !== nextProvider) {
+        return;
+      }
+      setModels(nextModels);
+      setModelsWarning(result.warning);
+      if (!nextModels.some((option) => option.id === model())) {
+        setModel(nextModels[0].id);
+      }
+    } catch (caught) {
+      const fallback = ensureSelectedModel(
+        FALLBACK_MODEL_OPTIONS[nextProvider],
+        selectedModel,
+      );
+      if (sequence !== modelLoadSequence || provider() !== nextProvider) {
+        return;
+      }
+      setModels(fallback);
+      setModelsWarning(normalizeAppError(caught).userMessage);
+      if (!fallback.some((option) => option.id === model())) {
+        setModel(fallback[0].id);
+      }
+    } finally {
+      if (sequence === modelLoadSequence && provider() === nextProvider) {
+        setModelsLoading(false);
+      }
+    }
+  }
+
+  onMount(() => {
+    void loadModels(provider(), model());
+  });
+
+  async function submit(event: Event) {
+    event.preventDefault();
+    setSaving(true);
+    setError(null);
+
+    try {
+      await props.onSave({
+        provider: provider(),
+        model: model().trim(),
+        resultLanguage: resultLanguage().trim(),
+        promptMode: "word-study",
+        apiKey: apiKey().trim().length > 0 ? apiKey().trim() : null,
+      });
+    } catch (caught) {
+      setError(normalizeAppError(caught).userMessage);
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <aside class="settings-panel" aria-label="設定">
+      <form onSubmit={submit}>
+        <div class="settings-header">
+          <h2>設定</h2>
+          <button type="button" class="icon-button" onClick={props.onClose}>
+            ×
+          </button>
+        </div>
+
+        <label>
+          <span>Provider</span>
+          <select
+            value={provider()}
+            onChange={(event) => {
+              const next = event.currentTarget.value as ProviderKind;
+              const nextModel = defaultModel(next);
+              setProvider(next);
+              setModel(nextModel);
+              void loadModels(next, nextModel);
+            }}
+          >
+            <option value="gemini">Gemini</option>
+            <option value="open-ai">OpenAI</option>
+            <option value="mock">Mock</option>
+          </select>
+        </label>
+
+        <label>
+          <span>Model</span>
+          <select
+            value={model()}
+            onChange={(event) => setModel(event.currentTarget.value)}
+            disabled={modelsLoading()}
+          >
+            <For each={models()}>
+              {(option) => (
+                <option value={option.id} selected={option.id === model()}>
+                  {option.label}
+                </option>
+              )}
+            </For>
+          </select>
+        </label>
+
+        <label>
+          <span>API key</span>
+          <input
+            type="password"
+            value={apiKey()}
+            placeholder={
+              props.settings.apiKeyConfigured
+                ? "保存済み。変更時だけ入力"
+                : "API key"
+            }
+            onInput={(event) => setApiKey(event.currentTarget.value)}
+            autocomplete="off"
+          />
+        </label>
+
+        <label>
+          <span>Result language</span>
+          <select
+            value={resultLanguage()}
+            onChange={(event) => setResultLanguage(event.currentTarget.value)}
+          >
+            <For each={RESULT_LANGUAGE_OPTIONS}>
+              {(option) => <option value={option.value}>{option.label}</option>}
+            </For>
+          </select>
+        </label>
+
+        <p class="settings-note">
+          API key は保存後も画面に戻しません。既存 key は空欄のまま保存すると維持されます。
+        </p>
+        <Show when={modelsWarning()}>
+          {(message) => <p class="settings-note">{message()}</p>}
+        </Show>
+
+        <Show when={error()}>
+          {(message) => <p class="settings-error">{message()}</p>}
+        </Show>
+
+        <button class="settings-save" type="submit" disabled={saving()}>
+          {saving() ? "保存中" : "保存"}
+        </button>
+      </form>
+    </aside>
+  );
+}
+
 function ResultView(props: {
   state: Extract<PopupState, { kind: "ready" }>;
-  copyStatus: CopyStatus;
-  settingsOpen: boolean;
   activeResultTab: ResultTab;
-  onCopy: () => void;
-  onRetry: () => void;
-  onClose: () => void;
-  onToggleSettings: () => void;
   onSetResultTab: (tab: ResultTab) => void;
 }) {
   const result = () => props.state.result;
@@ -505,48 +803,51 @@ function ResultView(props: {
           </Match>
         </Switch>
       </section>
+    </div>
+  );
+}
 
-      <footer class="action-bar">
-        <button class="primary-action" type="button" onClick={props.onCopy}>
-          コピー
-        </button>
-        <button type="button" onClick={props.onRetry}>
-          再試行
-        </button>
-        <button
-          type="button"
-          aria-expanded={props.settingsOpen}
-          onClick={props.onToggleSettings}
-        >
-          設定
-        </button>
-        <button type="button" onClick={props.onClose}>
-          閉じる
-        </button>
-      </footer>
+function StreamingResultView(props: {
+  state: Extract<PopupState, { kind: "streaming" }>;
+  activeResultTab: ResultTab;
+  onSetResultTab: (tab: ResultTab) => void;
+}) {
+  const result = () => props.state.partial;
+  const phaseText = () =>
+    props.state.phase === "validating" ? "検証中" : "生成中";
 
-      <Show when={props.copyStatus !== "idle" || props.settingsOpen}>
-        <aside class="utility-panel">
-          <Show when={props.copyStatus === "copied"}>
-            <p>コピーしました。</p>
-          </Show>
-          <Show when={props.copyStatus === "failed"}>
-            <p>コピーできませんでした。</p>
-          </Show>
-          <Show when={props.settingsOpen}>
-            <dl>
-              <div>
-                <dt>Shortcut</dt>
-                <dd>{props.state.shortcut}</dd>
-              </div>
-              <div>
-                <dt>Provider</dt>
-                <dd>Mock</dd>
-              </div>
-            </dl>
-          </Show>
-        </aside>
-      </Show>
+  return (
+    <div class="result-layout streaming-layout">
+      <section class="hero-summary">
+        <div class="hero-word">
+          <h2>{result().headword ?? "..."}</h2>
+        </div>
+        <p class="hero-nuance">{result().nuance ?? phaseText()}</p>
+      </section>
+
+      <nav class="result-tabs" aria-label="結果表示">
+        <TabButton
+          active={props.activeResultTab === "meaning"}
+          label="意味"
+          onClick={() => props.onSetResultTab("meaning")}
+        />
+        <TabButton
+          active={props.activeResultTab === "related"}
+          label="関連語"
+          onClick={() => props.onSetResultTab("related")}
+        />
+      </nav>
+
+      <section class="detail-pane">
+        <Switch>
+          <Match when={props.activeResultTab === "meaning"}>
+            <MeaningPane result={result()} pendingLabel={phaseText()} />
+          </Match>
+          <Match when={props.activeResultTab === "related"}>
+            <RelatedPane result={result()} pendingLabel={phaseText()} />
+          </Match>
+        </Switch>
+      </section>
     </div>
   );
 }
@@ -568,13 +869,17 @@ function TabButton(props: {
   );
 }
 
-function MeaningPane(props: { result: LexiResultV1 }) {
+function MeaningPane(props: { result: ResultLike; pendingLabel?: string }) {
   return (
     <div class="pane-grid meaning-pane">
       <section>
         <h3>意味</h3>
         <div class="meaning-list">
-          <For each={props.result.translations}>
+          <Show
+            when={props.result.translations.length > 0}
+            fallback={<p class="streaming-line">{props.pendingLabel ?? "生成中"}</p>}
+          >
+            <For each={props.result.translations}>
             {(translation) => (
               <article>
                 <strong>{translation.text}</strong>
@@ -587,7 +892,8 @@ function MeaningPane(props: { result: LexiResultV1 }) {
                 </Show>
               </article>
             )}
-          </For>
+            </For>
+          </Show>
         </div>
       </section>
       <Show when={props.result.warnings.length > 0}>
@@ -613,52 +919,45 @@ function partOfSpeechMark(note: string): string {
   return note.slice(0, 1);
 }
 
-function RelatedPane(props: { result: LexiResultV1 }) {
+function RelatedPane(props: { result: ResultLike; pendingLabel?: string }) {
   return (
-    <div class="related-columns">
-      <RelatedWordList
-        title="類似語"
-        words={props.result.synonyms}
-        result={props.result}
-        showUsageComparisons
-      />
-      <RelatedWordList
-        title="対義語"
-        words={props.result.antonyms}
-        result={props.result}
-      />
+    <div class="related-single">
+      <Show
+        when={props.result.synonyms.length > 0}
+        fallback={<p class="streaming-line">{props.pendingLabel ?? "生成中"}</p>}
+      >
+        <RelatedWordList title="類似語" words={props.result.synonyms} />
+      </Show>
     </div>
   );
 }
 
 function RelatedWordList(props: {
   title: string;
-  words: Array<{ term: string; japanese: string; nuance: string }>;
-  result: LexiResultV1;
-  showUsageComparisons?: boolean;
+  words: Array<{
+    term: string;
+    japanese: string;
+    nuance: string;
+    usageComparison: string;
+  }>;
 }) {
   return (
     <section class="related-section">
       <h3>{props.title}</h3>
       <For each={props.words}>
-        {(word) => (
-          <RelatedWordItem
-            word={word}
-            usageComparisons={
-              props.showUsageComparisons
-                ? usageComparisonsForWord(props.result, word.term)
-                : []
-            }
-          />
-        )}
+        {(word) => <RelatedWordItem word={word} />}
       </For>
     </section>
   );
 }
 
 function RelatedWordItem(props: {
-  word: { term: string; japanese: string; nuance: string };
-  usageComparisons: LexiResultV1["usageComparisons"];
+  word: {
+    term: string;
+    japanese: string;
+    nuance: string;
+    usageComparison: string;
+  };
 }) {
   const [open, setOpen] = createSignal(false);
 
@@ -678,31 +977,13 @@ function RelatedWordItem(props: {
       <div class="related-word-detail-shell" aria-hidden={!open()}>
         <div class="related-word-detail">
           <p>{props.word.nuance}</p>
-          <For each={props.usageComparisons}>
-            {(comparison) => (
-              <section class="usage-item">
-                <h4>{comparison.terms.join(" / ")}</h4>
-                <p>{comparison.explanation}</p>
-                <div class="example-row">
-                  <For each={comparison.examples}>
-                    {(example) => <span>{example}</span>}
-                  </For>
-                </div>
-              </section>
-            )}
-          </For>
+          <section class="usage-item">
+            <h4>使い分け</h4>
+            <p>{props.word.usageComparison}</p>
+          </section>
         </div>
       </div>
     </article>
-  );
-}
-
-function usageComparisonsForWord(result: LexiResultV1, term: string) {
-  const normalizedTerm = term.toLocaleLowerCase();
-  return result.usageComparisons.filter((comparison) =>
-    comparison.terms.some((comparisonTerm) =>
-      comparisonTerm.toLocaleLowerCase() === normalizedTerm,
-    ),
   );
 }
 
@@ -756,6 +1037,12 @@ function requestingState(
   return state.kind === "requesting" ? state : null;
 }
 
+function streamingState(
+  state: PopupState,
+): Extract<PopupState, { kind: "streaming" }> | null {
+  return state.kind === "streaming" ? state : null;
+}
+
 function readyState(
   state: PopupState,
 ): Extract<PopupState, { kind: "ready" }> | null {
@@ -774,6 +1061,8 @@ function titleForState(state: PopupState): string {
       return "取得中";
     case "requesting":
       return "処理中";
+    case "streaming":
+      return "生成中";
     case "ready":
       return "語彙メモ";
     case "error":
@@ -783,33 +1072,55 @@ function titleForState(state: PopupState): string {
   }
 }
 
-function formatResultForClipboard(result: LexiResultV1): string {
-  const translations = result.translations
-    .map((translation) =>
-      translation.note
-        ? `- ${translation.text}: ${translation.note}`
-        : `- ${translation.text}`,
-    )
-    .join("\n");
-  const comparisons = result.usageComparisons
-    .map(
-      (comparison) =>
-        `- ${comparison.terms.join(" / ")}: ${comparison.explanation}\n  ${comparison.examples.join("\n  ")}`,
-    )
-    .join("\n");
+function normalizeAppError(error: unknown): AppError {
+  if (isAppError(error)) {
+    return error;
+  }
 
-  return [
-    result.headword,
-    "",
-    "訳語",
-    translations,
-    "",
-    "ニュアンス",
-    result.nuance,
-    "",
-    "使い分け",
-    comparisons,
-  ].join("\n");
+  return {
+    code: "ProviderRequestFailed",
+    userMessage: "LLM request failed.",
+    diagnosticMessage: typeof error === "string" ? error : "unknown frontend error",
+    retryable: true,
+  };
+}
+
+function emptyPartialResult(): LexiPartialResult {
+  return {
+    headword: null,
+    translations: [],
+    nuance: null,
+    synonyms: [],
+    warnings: [],
+  };
+}
+
+function ensureSelectedModel(
+  models: ProviderModel[],
+  selectedModel: string,
+): ProviderModel[] {
+  if (
+    selectedModel.trim().length === 0 ||
+    models.some((model) => model.id === selectedModel)
+  ) {
+    return models;
+  }
+
+  return [{ id: selectedModel, label: selectedModel }, ...models];
+}
+
+function isAppError(value: unknown): value is AppError {
+  if (typeof value !== "object" || value === null) {
+    return false;
+  }
+
+  const record = value as Record<string, unknown>;
+  return (
+    typeof record.code === "string" &&
+    typeof record.userMessage === "string" &&
+    typeof record.diagnosticMessage === "string" &&
+    typeof record.retryable === "boolean"
+  );
 }
 
 export default App;
