@@ -47,7 +47,7 @@ Solid frontend:
 8. In Phase 5, after capture succeeds, the backend immediately starts the configured LLM provider request instead of waiting for a frontend command round trip.
 9. Provider responses are received as streams where supported. Backend accumulates the JSON, extracts completed safe partial fields, and emits progress events for incremental UI rendering.
 10. Backend validates the completed provider response against `schemaVersion`.
-11. Frontend renders partial content while streaming, then swaps to the validated final result or error state.
+11. Frontend renders skeleton placeholders for pending result fields, fades in completed partial content while streaming, then swaps to the validated final result or error state.
 
 ## Tauri Boundary
 
@@ -100,6 +100,7 @@ Phase 4 popup state:
 - Result actions are copy, retry, close, and settings. Copy writes only the structured mock result text, not captured source text.
 - Phase 5 removes the bottom result action bar. Settings opens from a header gear button and exposes provider, provider-backed model dropdown, embedded result-language dropdown, and API key update fields.
 - The popup window opens at a 500 by 620 default size with 360 by 360 minimum constraints and remains resizable. The frontend shell uses responsive constraints and pane-level scrolling so long result text does not clip at narrow widths.
+- During capturing, requesting, and streaming states, the dictionary-card body keeps the final layout visible with skeleton placeholders. Completed nuance, translation, and similar-word fields are inserted into their final positions with a short fade-in animation.
 
 Temporary PoC binary:
 

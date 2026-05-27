@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { createSignal } from "solid-js";
 import { render } from "solid-js/web";
 import { invoke } from "@tauri-apps/api/core";
 import {
@@ -124,6 +125,24 @@ function mockResult(): LexiResultV1 {
 }
 
 describe("PopupView", () => {
+  it("does not render Lexi as a placeholder headword while idle", () => {
+    const root = renderPopup({ kind: "idle", shortcut: "Ctrl+Shift+X" });
+
+    expect(root.querySelector(".headword")?.textContent).toBe("");
+    expect(root.textContent).toContain("待機中");
+  });
+
+  it("starts the capture flow with the skeleton result layout", () => {
+    const root = renderPopup({ kind: "capturing", shortcut: "Ctrl+Shift+X" });
+
+    expect(root.querySelector(".headword")?.textContent).toBe("");
+    expect(root.querySelector(".skeleton-block")).toBeInstanceOf(HTMLElement);
+    expect(root.querySelector('[aria-busy="true"]')).toBeInstanceOf(
+      HTMLElement,
+    );
+    expect(root.textContent).not.toContain("選択テキストを確認中");
+  });
+
   it("renders the requesting state after capture metadata is available", () => {
     const state: PopupState = {
       kind: "requesting",
@@ -139,7 +158,12 @@ describe("PopupView", () => {
 
     const root = renderPopup(state);
 
-    expect(root.textContent).toContain("42");
+    expect(root.querySelector(".headword")?.textContent).toBe("");
+    expect(root.querySelector(".skeleton-block")).toBeInstanceOf(HTMLElement);
+    const busyRegion = root.querySelector('[aria-busy="true"]');
+    expect(busyRegion).toBeInstanceOf(HTMLElement);
+    expect(busyRegion?.getAttribute("aria-label")).toContain("42");
+    expect(root.textContent).not.toContain("生成中");
   });
 
   it("renders LexiResultV1 meaning content without old bottom actions", () => {
@@ -212,6 +236,119 @@ describe("PopupView", () => {
     expect(root.textContent).toContain("delicate");
     expect(root.textContent).toContain("The room had a subtle scent.");
     expect(root.textContent).toContain("Understated rather than obvious.");
+    expect(root.querySelector(".nuance.content-reveal")).toBeInstanceOf(
+      HTMLElement,
+    );
+    expect(root.querySelector(".translation-row.content-reveal")).toBeInstanceOf(
+      HTMLElement,
+    );
+    expect(root.querySelector(".skeleton-block")).toBeInstanceOf(HTMLElement);
+    expect(root.textContent).not.toContain("生成中");
+  });
+
+  it("keeps the result body mounted when streaming becomes ready", async () => {
+    const streamingState: PopupState = {
+      kind: "streaming",
+      shortcut: "Ctrl+Shift+X",
+      requestId: 7,
+      phase: "streaming",
+      capture: readyState().capture,
+      partial: {
+        headword: "subtle",
+        translations: mockResult().translations,
+        nuance: mockResult().nuance,
+        synonyms: mockResult().synonyms,
+        warnings: [],
+      },
+    };
+    const [state, setState] = createSignal<PopupState>(streamingState);
+    const root = document.createElement("div");
+    render(
+      () => (
+        <PopupView
+          state={state()}
+          settingsOpen={false}
+          providerSettings={null}
+          activeResultTab="meaning"
+          themeMode="light"
+          onClose={noop}
+          onRetry={noop}
+          onToggleSettings={noop}
+          onToggleTheme={noop}
+          onSaveSettings={async () => undefined}
+          onSetResultTab={noop}
+        />
+      ),
+      root,
+    );
+
+    const bodyBefore = root.querySelector(".dictionary-layout");
+    setState(readyState());
+    await Promise.resolve();
+
+    expect(root.querySelector(".dictionary-layout")).toBe(bodyBefore);
+  });
+
+  it("updates similar words when a streaming partial replaces same-index content", async () => {
+    const first: PopupState = {
+      kind: "streaming",
+      shortcut: "Ctrl+Shift+X",
+      requestId: 7,
+      phase: "streaming",
+      capture: readyState().capture,
+      partial: {
+        headword: "subtle",
+        translations: [],
+        nuance: null,
+        synonyms: [
+          {
+            term: "delicate",
+            japanese: "繊細な",
+            usageComparison: "first comparison",
+          },
+        ],
+        warnings: [],
+      },
+    };
+    const [state, setState] = createSignal<PopupState>(first);
+    const root = document.createElement("div");
+    render(
+      () => (
+        <PopupView
+          state={state()}
+          settingsOpen={false}
+          providerSettings={null}
+          activeResultTab="meaning"
+          themeMode="light"
+          onClose={noop}
+          onRetry={noop}
+          onToggleSettings={noop}
+          onToggleTheme={noop}
+          onSaveSettings={async () => undefined}
+          onSetResultTab={noop}
+        />
+      ),
+      root,
+    );
+
+    setState({
+      ...first,
+      partial: {
+        ...first.partial,
+        synonyms: [
+          {
+            term: "slight",
+            japanese: "わずかな",
+            usageComparison: "second comparison",
+          },
+        ],
+      },
+    });
+    await Promise.resolve();
+
+    expect(root.textContent).toContain("slight");
+    expect(root.textContent).toContain("second comparison");
+    expect(root.textContent).not.toContain("delicate");
   });
 
   it("renders user-safe errors and diagnostics", () => {

@@ -1,5 +1,6 @@
 import {
   For,
+  Index,
   Match,
   Show,
   Switch,
@@ -513,35 +514,22 @@ export function PopupView(props: {
           </Match>
 
           <Match when={props.state.kind === "capturing"}>
-            <ProgressState
-              title="選択テキストを確認中"
-              detail="取得できた内容は画面に表示しません。"
-            />
+            <LoadingDictionaryView label="選択テキストを確認中" />
           </Match>
 
           <Match when={requestingState(props.state)}>
             {(requesting) => (
-              <ProgressState
-                title="結果を組み立て中"
-                detail={`${requesting().capture.characterCount} 文字を取得しました。`}
+              <LoadingDictionaryView
+                capture={requesting().capture}
+                label="結果を組み立て中"
               />
             )}
           </Match>
 
-          <Match when={streamingState(props.state)}>
-            {(streaming) => (
-              <StreamingResultView
-                state={streaming()}
-                activeResultTab={props.activeResultTab}
-                onSetResultTab={props.onSetResultTab}
-              />
-            )}
-          </Match>
-
-          <Match when={readyState(props.state)}>
-            {(ready) => (
-              <ResultView
-                state={ready()}
+          <Match when={resultState(props.state)}>
+            {(result) => (
+              <ResultDisplayView
+                state={result()}
                 activeResultTab={props.activeResultTab}
                 onSetResultTab={props.onSetResultTab}
               />
@@ -585,16 +573,6 @@ function EmptyState(props: { shortcut: string }) {
     <div class="center-state">
       <p class="status-text">待機中</p>
       <p class="support-text">{props.shortcut}</p>
-    </div>
-  );
-}
-
-function ProgressState(props: { title: string; detail: string }) {
-  return (
-    <div class="center-state">
-      <div class="spinner" aria-hidden="true" />
-      <p class="status-text">{props.title}</p>
-      <p class="support-text">{props.detail}</p>
     </div>
   );
 }
@@ -822,43 +800,58 @@ function SettingsPanel(props: {
   );
 }
 
-function ResultView(props: {
-  state: Extract<PopupState, { kind: "ready" }>;
+function ResultDisplayView(props: {
+  state:
+    | Extract<PopupState, { kind: "streaming" }>
+    | Extract<PopupState, { kind: "ready" }>;
   activeResultTab: ResultTab;
   onSetResultTab: (tab: ResultTab) => void;
 }) {
   void props.activeResultTab;
   void props.onSetResultTab;
-  return <DictionaryBody result={props.state.result} />;
-}
-
-function StreamingResultView(props: {
-  state: Extract<PopupState, { kind: "streaming" }>;
-  activeResultTab: ResultTab;
-  onSetResultTab: (tab: ResultTab) => void;
-}) {
-  void props.activeResultTab;
-  void props.onSetResultTab;
-  const phaseText = () =>
-    props.state.phase === "validating" ? "検証中" : "生成中";
 
   return (
     <DictionaryBody
-      result={props.state.partial}
-      pendingLabel={phaseText()}
-      streaming
+      result={
+        props.state.kind === "ready" ? props.state.result : props.state.partial
+      }
+      streaming={props.state.kind === "streaming"}
     />
+  );
+}
+
+function LoadingDictionaryView(props: {
+  capture?: CaptureMetadata;
+  label: string;
+}) {
+  const busyLabel = () =>
+    props.capture
+      ? `${props.label}: ${props.capture.characterCount} characters captured.`
+      : props.label;
+
+  return (
+    <div
+      class="dictionary-layout streaming"
+      aria-busy="true"
+      aria-label={busyLabel()}
+    >
+      <SkeletonDictionaryBody />
+    </div>
   );
 }
 
 function DictionaryBody(props: {
   result: ResultLike;
-  pendingLabel?: string;
   streaming?: boolean;
 }) {
   return (
     <div class="dictionary-layout" classList={{ streaming: props.streaming }}>
-      <p class="nuance">{props.result.nuance ?? props.pendingLabel}</p>
+      <Show
+        when={props.result.nuance}
+        fallback={<SkeletonBlock class="nuance-skeleton" />}
+      >
+        {(nuance) => <p class="nuance content-reveal">{nuance()}</p>}
+      </Show>
 
       <section class="section" aria-labelledby="translations-title">
         <h2 class="section-title" id="translations-title">
@@ -867,15 +860,13 @@ function DictionaryBody(props: {
         <div class="translation-list">
           <Show
             when={props.result.translations.length > 0}
-            fallback={
-              <p class="streaming-line">{props.pendingLabel ?? "生成中"}</p>
-            }
+            fallback={<TranslationSkeletonList />}
           >
-            <For each={props.result.translations}>
+            <Index each={props.result.translations}>
               {(translation) => (
-                <article class="translation-row">
+                <article class="translation-row content-reveal">
                   <div>
-                    <Show when={translation.note}>
+                    <Show when={translation().note}>
                       {(note) => (
                         <span class="pos-icon" aria-label={note()}>
                           {partOfSpeechMark(note())}
@@ -885,21 +876,23 @@ function DictionaryBody(props: {
                   </div>
                   <div>
                     <div class="translation-head">
-                      <span class="translation-text">{translation.text}</span>
+                      <span class="translation-text">
+                        {translation().text}
+                      </span>
                     </div>
                     <p class="example">
                       <HighlightedExample
-                        sentence={translation.example.sentence}
+                        sentence={translation().example.sentence}
                         target={props.result.headword ?? ""}
                       />
                       <span class="example-ja">
-                        {translation.example.japanese}
+                        {translation().example.japanese}
                       </span>
                     </p>
                   </div>
                 </article>
               )}
-            </For>
+            </Index>
           </Show>
         </div>
       </section>
@@ -910,9 +903,7 @@ function DictionaryBody(props: {
         </h2>
         <Show
           when={props.result.synonyms.length > 0}
-          fallback={
-            <p class="streaming-line">{props.pendingLabel ?? "生成中"}</p>
-          }
+          fallback={<RelatedWordSkeletonList />}
         >
           <RelatedWordList words={props.result.synonyms} />
         </Show>
@@ -923,6 +914,71 @@ function DictionaryBody(props: {
       </Show>
     </div>
   );
+}
+
+function SkeletonDictionaryBody() {
+  return (
+    <>
+      <SkeletonBlock class="nuance-skeleton" />
+      <section class="section" aria-labelledby="translations-loading-title">
+        <h2 class="section-title" id="translations-loading-title">
+          Translations
+        </h2>
+        <div class="translation-list">
+          <TranslationSkeletonList />
+        </div>
+      </section>
+      <section class="section" aria-labelledby="synonyms-loading-title">
+        <h2 class="section-title" id="synonyms-loading-title">
+          Similar words
+        </h2>
+        <RelatedWordSkeletonList />
+      </section>
+    </>
+  );
+}
+
+function TranslationSkeletonList() {
+  return (
+    <>
+      <TranslationSkeletonRow />
+      <TranslationSkeletonRow compact />
+    </>
+  );
+}
+
+function TranslationSkeletonRow(props: { compact?: boolean }) {
+  return (
+    <div class="translation-row skeleton-row" aria-hidden="true">
+      <SkeletonBlock class="pos-skeleton" />
+      <div class="skeleton-copy">
+        <SkeletonBlock class={props.compact ? "line-sm" : "line-md"} />
+        <SkeletonBlock class="line-full" />
+        <SkeletonBlock class="line-short" />
+      </div>
+    </div>
+  );
+}
+
+function RelatedWordSkeletonList() {
+  return (
+    <div class="related-section" aria-hidden="true">
+      <div class="synonym-row skeleton-related-row">
+        <div class="synonym-trigger skeleton-trigger">
+          <SkeletonBlock class="line-md" />
+        </div>
+      </div>
+      <div class="synonym-row skeleton-related-row">
+        <div class="synonym-trigger skeleton-trigger">
+          <SkeletonBlock class="line-sm" />
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function SkeletonBlock(props: { class?: string }) {
+  return <span class={`skeleton-block ${props.class ?? ""}`} />;
 }
 
 function HighlightedExample(props: { sentence: string; target: string }) {
@@ -1094,16 +1150,13 @@ function requestingState(
   return state.kind === "requesting" ? state : null;
 }
 
-function streamingState(
+function resultState(
   state: PopupState,
-): Extract<PopupState, { kind: "streaming" }> | null {
-  return state.kind === "streaming" ? state : null;
-}
-
-function readyState(
-  state: PopupState,
-): Extract<PopupState, { kind: "ready" }> | null {
-  return state.kind === "ready" ? state : null;
+):
+  | Extract<PopupState, { kind: "streaming" }>
+  | Extract<PopupState, { kind: "ready" }>
+  | null {
+  return state.kind === "streaming" || state.kind === "ready" ? state : null;
 }
 
 function errorState(
@@ -1115,23 +1168,23 @@ function errorState(
 function titleForState(state: PopupState): string {
   switch (state.kind) {
     case "capturing":
-      return "Capturing";
+      return "";
     case "requesting":
-      return "Loading";
+      return "";
     case "streaming":
-      return "Loading";
+      return "";
     case "ready":
       return state.result.headword;
     case "error":
       return "Error";
     case "idle":
-      return "Lexi";
+      return "";
   }
 }
 
 function headwordForState(state: PopupState): string {
   if (state.kind === "streaming") {
-    return state.partial.headword ?? "Lexi";
+    return state.partial.headword ?? "";
   }
 
   return titleForState(state);

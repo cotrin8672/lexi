@@ -36,6 +36,7 @@ Out of scope for the first release:
 - The app sends the selected text and selected prompt preset to the configured LLM provider immediately after backend capture succeeds.
 - Once the provider request starts, the popup should show a normalized preview of the selected word/text in the headword slot while the structured response is still pending.
 - The app should consume provider responses as streams where supported and render completed partial fields before the final response is validated.
+- While selection capture or structured response fields are pending, the popup should reserve the final result layout with skeleton placeholders and fade each field in as soon as that field is available.
 - The app validates the response against the expected schema before rendering it.
 - The default low-cost provider is Gemini, with OpenAI available as the fallback provider when Gemini responses are not stable enough.
 - The user can change provider, model, result language, and API key from the popup settings panel.
@@ -73,6 +74,7 @@ Out of scope for the first release:
 - First screen is the actual popup/work surface, not a landing page.
 - The popup should open at a stable default size but remain user-resizable within minimum constraints; loading text, long words, and errors should wrap or scroll inside their panes instead of clipping.
 - Primary result rendering is a single dictionary-card layout with the headword, nuance, translations, and similar words visible in one scrollable surface.
+- Pending capture and result areas should use skeleton placeholders instead of repeated loading text, so the result layout remains stable while streaming fields arrive.
 - Settings opens from a header gear button, not a bottom action bar.
 - The current result view should not reserve a bottom action row for copy/retry/settings.
 - Avoid persistent instructional text in the main popup.
