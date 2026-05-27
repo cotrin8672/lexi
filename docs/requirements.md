@@ -66,6 +66,7 @@ Out of scope for the first release:
 - Primary actions: copy result, retry, close, settings.
 - Avoid persistent instructional text in the main popup.
 - Use compact controls and clear state changes rather than decorative panels.
+- For word-study results, keep the headword, nuance, meanings, and related-word details scannable in the fixed popup without requiring whole-window scrolling.
 - For errors, show a short user-facing message plus a details affordance when technical information exists.
 
 ## LLM Output Schema

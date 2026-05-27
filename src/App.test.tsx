@@ -7,7 +7,7 @@ const noop = () => undefined;
 
 function renderPopup(
   state: PopupState,
-  activeResultTab: "meaning" | "nuance" | "usage" | "related" = "meaning",
+  activeResultTab: "meaning" | "related" = "meaning",
 ) {
   const root = document.createElement("div");
   render(
@@ -38,12 +38,20 @@ function mockResult(): LexiResultV1 {
     headword: "subtle",
     translations: [{ text: "微妙な", note: "気づきにくい差を表します。" }],
     nuance: "注意しないと見落とすほど控えめで、露骨ではない感覚があります。",
-    synonyms: [{ term: "delicate", japanese: "繊細な", nuance: "Fine detail." }],
+    synonyms: [
+      { term: "delicate", japanese: "繊細な", nuance: "Fine detail." },
+      { term: "slight", japanese: "わずかな", nuance: "Small amount." },
+    ],
     usageComparisons: [
       {
         terms: ["subtle", "slight"],
         explanation: "subtle は見落としやすさ、slight は量の小ささに焦点があります。",
         examples: ["There is a subtle difference."],
+      },
+      {
+        terms: ["subtle", "obvious"],
+        explanation: "obvious は誰でもすぐわかる状態です。",
+        examples: ["That hint was obvious."],
       },
     ],
     antonyms: [{ term: "obvious", japanese: "明らかな", nuance: "Easy to notice." }],
@@ -93,9 +101,9 @@ describe("PopupView", () => {
     expect(root.textContent).toContain("微妙な");
     expect(root.textContent).toContain("意味");
     expect(root.textContent).toContain("微妙な");
-    expect(root.textContent).toContain("ニュアンス");
-    expect(root.textContent).not.toContain("注意しないと見落とすほど控えめ");
-    expect(root.textContent).toContain("使い分け");
+    expect(root.textContent).not.toContain("ニュアンス");
+    expect(root.textContent).toContain("注意しないと見落とすほど控えめ");
+    expect(root.textContent).not.toContain("使い分け");
     expect(root.textContent).toContain("関連語");
     expect(root.textContent).toContain("コピー");
     expect(root.textContent).toContain("再試行");
@@ -103,7 +111,7 @@ describe("PopupView", () => {
     expect(root.textContent).toContain("閉じる");
   });
 
-  it("keeps nuance content in the nuance pane", () => {
+  it("keeps nuance content next to the headword", () => {
     const state: PopupState = {
       kind: "ready",
       shortcut: "Ctrl+Shift+X",
@@ -117,11 +125,37 @@ describe("PopupView", () => {
       result: mockResult(),
     };
 
-    const root = renderPopup(state, "nuance");
+    const root = renderPopup(state);
 
-    expect(root.textContent).toContain("ニュアンス");
     expect(root.textContent).toContain("注意しないと見落とすほど控えめ");
-    expect(root.textContent).not.toContain("気づきにくい差を表します。");
+    expect(root.textContent).not.toContain("ニュアンス");
+  });
+
+  it("renders related words as expandable rows with usage details", () => {
+    const state: PopupState = {
+      kind: "ready",
+      shortcut: "Ctrl+Shift+X",
+      capture: {
+        captureMethod: "uia-foreground-window",
+        sourceProcess: "notepad.exe",
+        sourceWindowTitle: "note.txt - Notepad",
+        characterCount: 42,
+        multiline: true,
+      },
+      result: mockResult(),
+    };
+
+    const root = renderPopup(state, "related");
+
+    expect(root.querySelectorAll(".related-word").length).toBeGreaterThan(0);
+    expect(root.querySelector(".related-word-trigger")?.getAttribute("aria-expanded")).toBe(
+      "false",
+    );
+    expect(root.textContent).toContain("slight");
+    expect(root.textContent).toContain("わずかな");
+    expect(root.textContent).toContain("subtle は見落としやすさ");
+    expect(root.textContent).toContain("obvious");
+    expect(root.textContent).not.toContain("obvious は誰でもすぐわかる状態");
   });
 
   it("renders user-safe errors and diagnostics", () => {

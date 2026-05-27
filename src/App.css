@@ -73,8 +73,7 @@ body {
   min-width: 0;
 }
 
-.eyebrow,
-.field-label {
+.eyebrow {
   margin: 0 0 1px;
   color: #66706c;
   font-size: 0.68rem;
@@ -116,22 +115,6 @@ h3 {
   letter-spacing: 0;
 }
 
-.icon-button {
-  display: inline-grid;
-  flex: 0 0 auto;
-  width: 34px;
-  height: 34px;
-  place-items: center;
-  border: 1px solid rgba(24, 32, 31, 0.16);
-  border-radius: 8px;
-  background: rgba(255, 255, 255, 0.78);
-  color: #18201f;
-  font-size: 1rem;
-  line-height: 1;
-  cursor: pointer;
-}
-
-.icon-button:hover,
 button:hover {
   background: #ffffff;
 }
@@ -205,8 +188,9 @@ button:hover {
 
 .hero-summary {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) 132px;
-  gap: 12px;
+  grid-template-columns: minmax(0, 0.75fr) minmax(0, 1.25fr);
+  align-items: center;
+  gap: 14px;
   min-width: 0;
   min-height: 0;
   padding: 16px;
@@ -222,28 +206,18 @@ button:hover {
   min-width: 0;
 }
 
-.translation-stack {
-  display: grid;
-  align-content: center;
-  gap: 6px;
+.hero-nuance {
   min-width: 0;
-}
-
-.translation-stack span {
-  min-width: 0;
-  padding: 4px 8px;
-  border-radius: 999px;
-  background: #193d38;
-  color: #ffffff;
+  margin: 0;
+  color: #52615d;
   font-size: 0.82rem;
-  font-weight: 800;
-  text-align: center;
+  line-height: 1.45;
   overflow-wrap: anywhere;
 }
 
 .result-tabs {
   display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
+  grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 6px;
   min-width: 0;
   padding: 4px;
@@ -294,10 +268,6 @@ button:hover {
   grid-template-rows: auto minmax(0, 1fr) auto;
 }
 
-.nuance-pane {
-  align-content: center;
-}
-
 .pane-grid section,
 .related-section {
   min-width: 0;
@@ -332,11 +302,17 @@ button:hover {
   color: #13211f;
 }
 
-.meaning-list span {
-  min-width: 0;
-  color: #66706c;
+.part-of-speech-mark {
+  display: inline-grid;
+  width: 24px;
+  height: 24px;
+  place-items: center;
+  border: 1px solid rgba(24, 32, 31, 0.24);
+  border-radius: 6px;
+  color: rgba(24, 32, 31, 0.46);
   font-size: 0.78rem;
-  font-weight: 800;
+  font-weight: 850;
+  line-height: 1;
 }
 
 .warning-line {
@@ -350,6 +326,15 @@ button:hover {
 .usage-item {
   display: grid;
   gap: 6px;
+  padding-top: 8px;
+  border-top: 1px solid rgba(24, 32, 31, 0.1);
+}
+
+.usage-item h4 {
+  margin: 0;
+  color: #34433f;
+  font-size: 0.74rem;
+  font-weight: 850;
 }
 
 .example-row {
@@ -387,23 +372,71 @@ button:hover {
 
 .related-word {
   display: grid;
-  gap: 4px;
+  grid-template-rows: auto 0fr;
   min-width: 0;
+  border-radius: 7px;
+  background: rgba(45, 118, 106, 0.08);
+  overflow: hidden;
+  transition: grid-template-rows 180ms ease;
 }
 
-.related-word div {
+.related-word.expanded {
+  grid-template-rows: auto 1fr;
+}
+
+.related-word-trigger {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  padding: 8px 10px;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.related-word-trigger::after {
+  content: "";
+  width: 6px;
+  height: 6px;
+  border-right: 1.5px solid rgba(24, 32, 31, 0.34);
+  border-bottom: 1.5px solid rgba(24, 32, 31, 0.34);
+  transform: rotate(45deg);
+  transition: transform 140ms ease, border-color 140ms ease;
+}
+
+.related-word.expanded .related-word-trigger::after {
+  transform: rotate(225deg);
+}
+
+.related-word-label {
   display: flex;
   align-items: baseline;
   gap: 7px;
   min-width: 0;
 }
 
-.related-word span {
+.related-word-label > span {
   min-width: 0;
   color: #2d766a;
   font-size: 0.8rem;
   font-weight: 850;
   overflow-wrap: anywhere;
+}
+
+.related-word-detail-shell {
+  min-height: 0;
+  overflow: hidden;
+}
+
+.related-word-detail {
+  display: grid;
+  gap: 8px;
+  min-width: 0;
+  padding: 0 10px 10px;
 }
 
 .action-bar,
@@ -530,12 +563,12 @@ dd {
     grid-template-rows: auto auto;
   }
 
-  .translation-stack {
-    grid-template-columns: repeat(3, minmax(0, 1fr));
+  .related-columns {
+    grid-template-columns: 1fr;
   }
 
   .result-layout {
-    grid-template-rows: 132px 40px minmax(0, 1fr) 42px;
+    grid-template-rows: 128px 40px minmax(0, 1fr) 42px;
   }
 }
 

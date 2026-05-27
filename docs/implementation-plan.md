@@ -200,7 +200,7 @@ Acceptance criteria:
 - Long text does not overflow controls or resize the window unexpectedly.
 - The UI works with mock data before provider integration.
 
-Result: Phase 4 keeps raw selected text out of the frontend. The popup transitions from capture metadata to a mock transformation result, validates the mock result with the TypeScript schema guard before rendering, and keeps provider work behind the Phase 5 boundary. The result UI is organized into compact `意味`, `ニュアンス`, `使い分け`, and `関連語` panes so each kind of explanation stays separate and the fixed popup is not dependent on whole-window scrolling for normal content.
+Result: Phase 4 keeps raw selected text out of the frontend. The popup transitions from capture metadata to a mock transformation result, validates the mock result with the TypeScript schema guard before rendering, and keeps provider work behind the Phase 5 boundary. The result UI is organized into compact `意味` and `関連語` panes: nuance stays next to the headword, and usage comparisons are folded into expandable related-word rows so the fixed popup is not dependent on whole-window scrolling for normal content.
 
 Automated coverage:
 

@@ -84,7 +84,7 @@ Phase 4 popup state:
 - Solid state variants are `idle`, `capturing`, `requesting`, `ready`, and `error`.
 - `captured` events are treated as redacted metadata only and transition into a mock `requesting` state.
 - The frontend validates the mock `LexiResultV1` with `validateLexiResultV1` before rendering the `ready` state.
-- The Phase 4 mock word-study result renders separate Japanese panes for meaning, nuance, usage, and related words to fit the fixed popup window without mixing explanation types.
+- The Phase 4 mock word-study result renders compact Japanese panes for meaning and related words. Nuance is shown next to the headword, and usage comparisons are folded into expandable related-word rows.
 - Result actions are copy, retry, close, and settings. Copy writes only the structured mock result text, not captured source text.
 
 Temporary PoC binary:

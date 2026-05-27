@@ -61,7 +61,7 @@ type PopupErrorContext = {
   retryCapture: CaptureMetadata | null;
 };
 
-type ResultTab = "meaning" | "nuance" | "usage" | "related";
+type ResultTab = "meaning" | "related";
 type CopyStatus = "idle" | "copied" | "failed";
 
 export type PopupState =
@@ -383,14 +383,6 @@ export function PopupView(props: {
             <h1>{titleForState(props.state)}</h1>
           </div>
         </div>
-        <button
-          class="icon-button"
-          type="button"
-          aria-label="閉じる"
-          onClick={props.onClose}
-        >
-          x
-        </button>
       </header>
 
       <section class="popup-body" aria-live="polite">
@@ -485,14 +477,9 @@ function ResultView(props: {
     <div class="result-layout">
       <section class="hero-summary">
         <div class="hero-word">
-          <p class="field-label">word study</p>
           <h2>{result().headword}</h2>
         </div>
-        <div class="translation-stack">
-          <For each={result().translations.slice(0, 3)}>
-            {(translation) => <span>{translation.text}</span>}
-          </For>
-        </div>
+        <p class="hero-nuance">{result().nuance}</p>
       </section>
 
       <nav class="result-tabs" aria-label="結果表示">
@@ -500,16 +487,6 @@ function ResultView(props: {
           active={props.activeResultTab === "meaning"}
           label="意味"
           onClick={() => props.onSetResultTab("meaning")}
-        />
-        <TabButton
-          active={props.activeResultTab === "nuance"}
-          label="ニュアンス"
-          onClick={() => props.onSetResultTab("nuance")}
-        />
-        <TabButton
-          active={props.activeResultTab === "usage"}
-          label="使い分け"
-          onClick={() => props.onSetResultTab("usage")}
         />
         <TabButton
           active={props.activeResultTab === "related"}
@@ -522,12 +499,6 @@ function ResultView(props: {
         <Switch>
           <Match when={props.activeResultTab === "meaning"}>
             <MeaningPane result={result()} />
-          </Match>
-          <Match when={props.activeResultTab === "nuance"}>
-            <NuancePane result={result()} />
-          </Match>
-          <Match when={props.activeResultTab === "usage"}>
-            <UsagePane result={result()} />
           </Match>
           <Match when={props.activeResultTab === "related"}>
             <RelatedPane result={result()} />
@@ -608,7 +579,11 @@ function MeaningPane(props: { result: LexiResultV1 }) {
               <article>
                 <strong>{translation.text}</strong>
                 <Show when={translation.note}>
-                  {(note) => <span>{note()}</span>}
+                  {(note) => (
+                    <span class="part-of-speech-mark">
+                      {partOfSpeechMark(note())}
+                    </span>
+                  )}
                 </Show>
               </article>
             )}
@@ -622,42 +597,36 @@ function MeaningPane(props: { result: LexiResultV1 }) {
   );
 }
 
-function NuancePane(props: { result: LexiResultV1 }) {
-  return (
-    <div class="pane-grid nuance-pane">
-      <section>
-        <h3>ニュアンス</h3>
-        <p>{props.result.nuance}</p>
-      </section>
-    </div>
-  );
-}
-
-function UsagePane(props: { result: LexiResultV1 }) {
-  return (
-    <div class="pane-grid">
-      <For each={props.result.usageComparisons}>
-        {(comparison) => (
-          <section class="usage-item">
-            <h3>{comparison.terms.join(" / ")}</h3>
-            <p>{comparison.explanation}</p>
-            <div class="example-row">
-              <For each={comparison.examples}>
-                {(example) => <span>{example}</span>}
-              </For>
-            </div>
-          </section>
-        )}
-      </For>
-    </div>
-  );
+function partOfSpeechMark(note: string): string {
+  if (note.includes("形容")) {
+    return "形";
+  }
+  if (note.includes("副")) {
+    return "副";
+  }
+  if (note.includes("名")) {
+    return "名";
+  }
+  if (note.includes("動")) {
+    return "動";
+  }
+  return note.slice(0, 1);
 }
 
 function RelatedPane(props: { result: LexiResultV1 }) {
   return (
     <div class="related-columns">
-      <RelatedWordList title="類似語" words={props.result.synonyms} />
-      <RelatedWordList title="対義語" words={props.result.antonyms} />
+      <RelatedWordList
+        title="類似語"
+        words={props.result.synonyms}
+        result={props.result}
+        showUsageComparisons
+      />
+      <RelatedWordList
+        title="対義語"
+        words={props.result.antonyms}
+        result={props.result}
+      />
     </div>
   );
 }
@@ -665,22 +634,75 @@ function RelatedPane(props: { result: LexiResultV1 }) {
 function RelatedWordList(props: {
   title: string;
   words: Array<{ term: string; japanese: string; nuance: string }>;
+  result: LexiResultV1;
+  showUsageComparisons?: boolean;
 }) {
   return (
     <section class="related-section">
       <h3>{props.title}</h3>
       <For each={props.words}>
         {(word) => (
-          <article class="related-word">
-            <div>
-              <strong>{word.term}</strong>
-              <span>{word.japanese}</span>
-            </div>
-            <p>{word.nuance}</p>
-          </article>
+          <RelatedWordItem
+            word={word}
+            usageComparisons={
+              props.showUsageComparisons
+                ? usageComparisonsForWord(props.result, word.term)
+                : []
+            }
+          />
         )}
       </For>
     </section>
+  );
+}
+
+function RelatedWordItem(props: {
+  word: { term: string; japanese: string; nuance: string };
+  usageComparisons: LexiResultV1["usageComparisons"];
+}) {
+  const [open, setOpen] = createSignal(false);
+
+  return (
+    <article class="related-word" classList={{ expanded: open() }}>
+      <button
+        class="related-word-trigger"
+        type="button"
+        aria-expanded={open()}
+        onClick={() => setOpen((current) => !current)}
+      >
+        <span class="related-word-label">
+          <strong>{props.word.term}</strong>
+          <span>{props.word.japanese}</span>
+        </span>
+      </button>
+      <div class="related-word-detail-shell" aria-hidden={!open()}>
+        <div class="related-word-detail">
+          <p>{props.word.nuance}</p>
+          <For each={props.usageComparisons}>
+            {(comparison) => (
+              <section class="usage-item">
+                <h4>{comparison.terms.join(" / ")}</h4>
+                <p>{comparison.explanation}</p>
+                <div class="example-row">
+                  <For each={comparison.examples}>
+                    {(example) => <span>{example}</span>}
+                  </For>
+                </div>
+              </section>
+            )}
+          </For>
+        </div>
+      </div>
+    </article>
+  );
+}
+
+function usageComparisonsForWord(result: LexiResultV1, term: string) {
+  const normalizedTerm = term.toLocaleLowerCase();
+  return result.usageComparisons.filter((comparison) =>
+    comparison.terms.some((comparisonTerm) =>
+      comparisonTerm.toLocaleLowerCase() === normalizedTerm,
+    ),
   );
 }
 
