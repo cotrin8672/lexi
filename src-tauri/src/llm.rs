@@ -499,9 +499,12 @@ Hard requirements:
 
 Field contract:
 - headword: canonical dictionary/base form or short phrase, max 48 characters. Do not copy an inflected selected word such as a past-tense verb when a base form is known.
-- translations: dictionary-style Japanese sense entries, not nuance explanations or synonym lists. Return 1 to 3 items only when each item represents a distinct dictionary sense.
+- translations: dictionary-style Japanese sense entries, not nuance explanations, not a thesaurus, not a list of alternative Japanese renderings, and not a vocabulary expansion list. Return 1 to 3 items only when each item represents a distinct English dictionary sense that should be learned separately.
   - text must be a compact Japanese equivalent or established Japanese expression that can stand as a dictionary meaning entry.
-  - Separate entries by dictionary sense boundaries such as part of speech, countable vs uncountable use, transitive vs intransitive use, concrete vs abstract use, or established idiomatic use.
+  - Prefer one broad entry when several Japanese words translate the same English sense. Put comma-separated Japanese alternatives in one text value only when that is clearer than choosing one broad equivalent.
+  - Separate entries only by real English-side sense boundaries such as part of speech, countable vs uncountable use, transitive vs intransitive use, concrete vs abstract use, legal/social vs technical use, or established idiomatic use.
+  - Do not split entries merely because Japanese collocations differ. For example, "adoption" should not become separate entries for 採用 and 採択 unless you can point to different English dictionary senses, not just different Japanese objects.
+  - Do not split entries merely because Japanese wording differs in register, domain, or naturalness. For example, "demonstration" should not become separate entries for デモ and 実演 when both mean showing how something works.
   - Do not create multiple entries by rephrasing the same sense, changing formality, or offering Japanese synonyms. For example, "近づく" and "接近する" are the same sense; keep only the natural broad entry "近づく".
   - If candidates differ only in wording, kanji/kana style, formality, specificity, or explanation length, keep the broadest common dictionary equivalent and omit the rest.
   - Do not output sentence-like glosses, usage explanations, source-text summaries, or "X after Y" definitions. Put usage feel in nuance instead.
@@ -518,8 +521,10 @@ Field contract:
 
 Quality rules:
 - Prefer precision over coverage.
+- The translations array is a short sense inventory, not a Japanese synonym list. If you are unsure whether two entries are separate English senses, merge them.
 - For translations, prefer dictionary sense entries over explanations. Use nuance for explanations, not translations.
-- Before finalizing translations, compare every pair of translation entries. Merge or delete overlapping Japanese meanings unless they differ by a real dictionary sense boundary.
+- Before finalizing translations, compare every pair of translation entries. Merge or delete overlapping Japanese meanings unless they differ by a real English-side dictionary sense boundary. Different Japanese word choice alone is never enough.
+- A good translation list should make the user think "these are different meanings or parts of speech", not "these are several ways to say the same thing in Japanese".
 - A Japanese synonym, register difference, or wording preference is not a sense boundary. Do not split entries for pairs like 近づく/接近する, 始める/開始する, 使う/使用する, わずかな/少しの.
 - Keep each translation example short and aligned with that translation's specific sense.
 - Do not repeat the same information across headword nuance and synonym usageComparison.
@@ -1533,6 +1538,16 @@ mod tests {
         assert!(prompt.contains("数学"));
         assert!(prompt.contains("dictionary-style Japanese sense entries"));
         assert!(prompt.contains("part of speech, countable vs uncountable use"));
+        assert!(prompt.contains("not a list of alternative Japanese renderings"));
+        assert!(prompt.contains("distinct English dictionary sense"));
+        assert!(prompt.contains("adoption"));
+        assert!(prompt.contains("採用"));
+        assert!(prompt.contains("採択"));
+        assert!(prompt.contains("demonstration"));
+        assert!(prompt.contains("デモ"));
+        assert!(prompt.contains("実演"));
+        assert!(prompt.contains("not a Japanese synonym list"));
+        assert!(prompt.contains("Different Japanese word choice alone is never enough"));
         assert!(prompt.contains("Do not create multiple entries by rephrasing the same sense"));
         assert!(prompt.contains("近づく"));
         assert!(prompt.contains("接近する"));
