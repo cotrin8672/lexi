@@ -34,6 +34,7 @@ Out of scope for the first release:
 - When the shortcut fires, the app attempts to read the current foreground selection.
 - If selected text is available, the app opens a small popup near the active context or at a deterministic fallback position.
 - The app sends the selected text and selected prompt preset to the configured LLM provider immediately after backend capture succeeds.
+- Once the provider request starts, the popup should show a normalized preview of the selected word/text in the headword slot while the structured response is still pending.
 - The app should consume provider responses as streams where supported and render completed partial fields before the final response is validated.
 - The app validates the response against the expected schema before rendering it.
 - The default low-cost provider is Gemini, with OpenAI available as the fallback provider when Gemini responses are not stable enough.
@@ -70,13 +71,13 @@ Out of scope for the first release:
 ## UI Requirements
 
 - First screen is the actual popup/work surface, not a landing page.
-- The popup should have stable dimensions with responsive constraints so loading text, long words, and errors do not resize the shell unexpectedly.
-- Primary result interactions are the meaning/related-word tabs and structured content disclosure.
+- The popup should open at a stable default size but remain user-resizable within minimum constraints; loading text, long words, and errors should wrap or scroll inside their panes instead of clipping.
+- Primary result rendering is a single dictionary-card layout with the headword, nuance, translations, and similar words visible in one scrollable surface.
 - Settings opens from a header gear button, not a bottom action bar.
 - The current result view should not reserve a bottom action row for copy/retry/settings.
 - Avoid persistent instructional text in the main popup.
 - Use compact controls and clear state changes rather than decorative panels.
-- For word-study results, keep the headword, nuance, meanings, and related-word details scannable in the fixed popup without requiring whole-window scrolling.
+- For word-study results, keep the headword, nuance, meanings, and related-word details scannable in the resizable popup, with only the card body scrolling when content exceeds available height.
 - For errors, show a short user-facing message plus a details affordance when technical information exists.
 
 ## LLM Output Schema
@@ -93,7 +94,11 @@ Initial schema draft for the first word-study workflow:
   "translations": [
     {
       "text": "string",
-      "note": "string or null"
+      "note": "string or null",
+      "example": {
+        "sentence": "string",
+        "japanese": "string"
+      }
     }
   ],
   "nuance": "string",
@@ -101,7 +106,6 @@ Initial schema draft for the first word-study workflow:
     {
       "term": "string",
       "japanese": "string",
-      "nuance": "string",
       "usageComparison": "string"
     }
   ],
@@ -113,10 +117,14 @@ Rules:
 
 - `schemaVersion` is required.
 - `headword`, `translations`, and `nuance` are required for rendering.
+- `headword` should be the dictionary/base form for a single inflected word when the base form is known, for example `went` should render as `go`.
 - `translations` must contain at least one Japanese translation.
+- `translations` should be dictionary-style Japanese sense entries, not explanation sentences or Japanese synonym lists. Use one to three entries only when they represent real dictionary sense boundaries such as part of speech, countable versus uncountable use, transitive versus intransitive use, concrete versus abstract use, or established idiomatic use. Near-duplicate Japanese paraphrases should be collapsed into the broadest common dictionary equivalent. For example, `近づく` and `接近する` are the same sense and must not be separate entries.
+- Each translation `note` must be `null` or one of these part-of-speech labels: `名詞`, `動詞`, `形容詞`, `副詞`, `前置詞`, `接続詞`, `代名詞`, `助動詞`, `冠詞`, `間投詞`, `句`, `成句`, `接頭辞`, `接尾辞`. Semantic domains such as math, comparison, or technical field labels are not allowed in `note`.
+- Each translation must include one short natural example sentence in `example.sentence` and its Japanese translation in `example.japanese`. The example should demonstrate that translation entry's specific sense.
 - `nuance` should be an intuitive explanation for deciding when the headword is appropriate.
-- `synonyms` should contain near words that help the user learn practical usage distinctions.
-- Each synonym must include the English term, Japanese meaning, the synonym's own nuance, and a direct `usageComparison` sentence against the headword.
+- `synonyms` may be empty when reliable near words are unavailable; otherwise it should contain near words that help the user learn practical usage distinctions.
+- Each synonym must include the English term, Japanese meaning, and a direct `usageComparison` sentence against the headword.
 - Antonyms are intentionally omitted from the first word-study result.
 - The renderer must reject unknown or missing schema versions instead of guessing.
 

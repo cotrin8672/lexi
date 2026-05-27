@@ -121,7 +121,7 @@ Tasks:
 
 - Add `AppError` with stable code, user message, diagnostic message, and retryable flag.
 - Map `SelectionCaptureError` to `AppError`.
-- Add Rust structs for `LexiResultV1`, translations, synonyms, and per-synonym usage comparisons.
+- Add Rust structs for `LexiResultV1`, translations with per-sense example sentences, synonyms, and per-synonym usage comparisons.
 - Add strict schema validation for required fields and `schemaVersion`.
 - Mirror result and error types in `src/lib/schema.ts` and `src/lib/errors.ts`.
 - Add unit tests for error mapping and schema validation.
@@ -132,7 +132,7 @@ Acceptance criteria:
 - Unknown result schema versions are rejected.
 - Tests cover success and invalid model output paths.
 
-Result: The first AI result contract is `lexi.result.v1` with `mode: "word-study"`. Provider output must include a headword, Japanese translations, an intuitive usage nuance, near-word synonyms with a direct usage comparison for each synonym, and warnings, then pass backend validation before the UI renders it. Antonyms are intentionally omitted.
+Result: The first AI result contract is `lexi.result.v1` with `mode: "word-study"`. Provider output must include a headword, Japanese translations with one example sentence and Japanese translation per sense, an intuitive usage nuance, near-word synonyms with a direct usage comparison for each synonym, and warnings, then pass backend validation before the UI renders it. Antonyms are intentionally omitted.
 
 ## Phase 3: Shortcut and Native Window Shell
 
@@ -218,6 +218,7 @@ Tasks:
 - Add prompt builder for the first `word-study` workflow:
   - Japanese translations;
   - intuitive headword nuance;
+  - short example sentences and Japanese translations for each meaning entry;
   - near-word synonyms;
   - practical usage difference for each synonym.
 - Add timeout and retry policy.

@@ -1,7 +1,12 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { render } from "solid-js/web";
 import { invoke } from "@tauri-apps/api/core";
-import { LEXI_RESULT_V1_SCHEMA_VERSION, type LexiResultV1 } from "./lib/schema";
+import {
+  LEXI_RESULT_V1_SCHEMA_VERSION,
+  TRANSLATION_NOTE_VALUES,
+  validateLexiResultV1,
+  type LexiResultV1,
+} from "./lib/schema";
 import App, { PopupView, type PopupState } from "./App";
 
 const noop = () => undefined;
@@ -29,10 +34,15 @@ beforeEach(() => {
   tauriMocks.listen.mockReset();
   tauriMocks.hide.mockReset();
   tauriMocks.listeners = {};
-  tauriMocks.listen.mockImplementation((event: string, handler: (event: { payload: unknown }) => void) => {
-    tauriMocks.listeners[event] = [...(tauriMocks.listeners[event] ?? []), handler];
-    return Promise.resolve(() => undefined);
-  });
+  tauriMocks.listen.mockImplementation(
+    (event: string, handler: (event: { payload: unknown }) => void) => {
+      tauriMocks.listeners[event] = [
+        ...(tauriMocks.listeners[event] ?? []),
+        handler,
+      ];
+      return Promise.resolve(() => undefined);
+    },
+  );
   document.body.innerHTML = "";
 });
 
@@ -48,9 +58,11 @@ function renderPopup(
         settingsOpen={false}
         providerSettings={null}
         activeResultTab={activeResultTab}
+        themeMode="light"
         onClose={noop}
         onRetry={noop}
         onToggleSettings={noop}
+        onToggleTheme={noop}
         onSaveSettings={async () => undefined}
         onSetResultTab={noop}
       />
@@ -60,6 +72,21 @@ function renderPopup(
   return root;
 }
 
+function readyState(result = mockResult()): PopupState {
+  return {
+    kind: "ready",
+    shortcut: "Ctrl+Shift+X",
+    capture: {
+      captureMethod: "uia-foreground-window",
+      sourceProcess: "notepad.exe",
+      sourceWindowTitle: "note.txt - Notepad",
+      characterCount: 42,
+      multiline: true,
+    },
+    result,
+  };
+}
+
 function mockResult(): LexiResultV1 {
   return {
     schemaVersion: LEXI_RESULT_V1_SCHEMA_VERSION,
@@ -67,22 +94,29 @@ function mockResult(): LexiResultV1 {
     sourceLanguage: "en",
     resultLanguage: "ja",
     headword: "subtle",
-    translations: [{ text: "微妙な", note: "気づきにくい差を表します。" }],
-    nuance: "注意しないと見落とすほど控えめで、露骨ではない感覚があります。",
+    translations: [
+      {
+        text: "delicate",
+        note: TRANSLATION_NOTE_VALUES[2],
+        example: {
+          sentence: "She noticed a subtle change in his voice.",
+          japanese: "She noticed a subtle change in his voice.",
+        },
+      },
+    ],
+    nuance: "Used for something understated and easy to miss.",
     synonyms: [
       {
         term: "delicate",
-        japanese: "繊細な",
-        nuance: "細部や壊れやすさに焦点があります。",
+        japanese: "delicate",
         usageComparison:
-          "subtle は気づきにくさ、delicate は細かさや壊れやすさを言う時に使います。",
+          "Choose subtle for hard-to-notice differences; choose delicate for fine detail.",
       },
       {
         term: "slight",
-        japanese: "わずかな",
-        nuance: "量や程度が小さい感じです。",
+        japanese: "slight",
         usageComparison:
-          "subtle は読み取りにくさ、slight は単に量が小さいことを言う時に使います。",
+          "Choose subtle for understated meaning; choose slight for a small degree.",
       },
     ],
     warnings: ["Mock result."],
@@ -105,88 +139,40 @@ describe("PopupView", () => {
 
     const root = renderPopup(state);
 
-    expect(root.textContent).toContain("処理中");
-    expect(root.textContent).toContain("結果を組み立て中");
-    expect(root.textContent).toContain("42 文字を取得しました");
+    expect(root.textContent).toContain("42");
   });
 
-  it("renders LexiResultV1 content without the old bottom actions", () => {
-    const state: PopupState = {
-      kind: "ready",
-      shortcut: "Ctrl+Shift+X",
-      capture: {
-        captureMethod: "uia-foreground-window",
-        sourceProcess: "notepad.exe",
-        sourceWindowTitle: "note.txt - Notepad",
-        characterCount: 42,
-        multiline: true,
-      },
-      result: mockResult(),
-    };
+  it("renders LexiResultV1 meaning content without old bottom actions", () => {
+    const root = renderPopup(readyState());
 
-    const root = renderPopup(state);
-
-    expect(root.textContent).toContain("語彙メモ");
     expect(root.textContent).toContain("subtle");
-    expect(root.textContent).toContain("微妙な");
-    expect(root.textContent).toContain("意味");
-    expect(root.textContent).toContain("微妙な");
-    expect(root.textContent).not.toContain("ニュアンス");
-    expect(root.textContent).toContain("注意しないと見落とすほど控えめ");
-    expect(root.textContent).not.toContain("使い分け");
-    expect(root.textContent).toContain("関連語");
-    expect(root.querySelector('button[aria-label="設定"]')).toBeInstanceOf(
-      HTMLButtonElement,
+    expect(root.textContent).toContain("delicate");
+    expect(root.textContent).toContain("She noticed a subtle change");
+    expect(root.textContent).toContain(
+      "Used for something understated and easy to miss.",
     );
-    expect(root.textContent).not.toContain("コピー");
-    expect(root.textContent).not.toContain("再試行");
+    expect(root.querySelector(".example-target")?.textContent).toBe("subtle");
+    expect(root.querySelector(".example-target")?.textContent).not.toBe(
+      "She noticed a subtle change in his voice.",
+    );
+    expect(root.querySelector(".error-actions")).toBeNull();
   });
 
-  it("keeps nuance content next to the headword", () => {
-    const state: PopupState = {
-      kind: "ready",
-      shortcut: "Ctrl+Shift+X",
-      capture: {
-        captureMethod: "uia-foreground-window",
-        sourceProcess: "notepad.exe",
-        sourceWindowTitle: "note.txt - Notepad",
-        characterCount: 42,
-        multiline: true,
-      },
-      result: mockResult(),
+  it("renders related words as expandable rows with usage details but no per-entry nuance", () => {
+    const result = mockResult() as LexiResultV1 & {
+      synonyms: Array<LexiResultV1["synonyms"][number] & { nuance?: string }>;
     };
+    result.synonyms[0].nuance = "SHOULD_NOT_RENDER";
 
-    const root = renderPopup(state);
+    const root = renderPopup(readyState(result), "related");
 
-    expect(root.textContent).toContain("注意しないと見落とすほど控えめ");
-    expect(root.textContent).not.toContain("ニュアンス");
-  });
-
-  it("renders related words as expandable rows with usage details", () => {
-    const state: PopupState = {
-      kind: "ready",
-      shortcut: "Ctrl+Shift+X",
-      capture: {
-        captureMethod: "uia-foreground-window",
-        sourceProcess: "notepad.exe",
-        sourceWindowTitle: "note.txt - Notepad",
-        characterCount: 42,
-        multiline: true,
-      },
-      result: mockResult(),
-    };
-
-    const root = renderPopup(state, "related");
-
-    expect(root.querySelectorAll(".related-word").length).toBeGreaterThan(0);
-    expect(root.querySelector(".related-word-trigger")?.getAttribute("aria-expanded")).toBe(
-      "false",
-    );
+    expect(root.querySelectorAll(".synonym-row").length).toBeGreaterThan(0);
+    expect(
+      root.querySelector(".synonym-trigger")?.getAttribute("aria-expanded"),
+    ).toBe("false");
     expect(root.textContent).toContain("slight");
-    expect(root.textContent).toContain("わずかな");
-    expect(root.textContent).toContain("使い分け");
-    expect(root.textContent).toContain("subtle は読み取りにくさ");
-    expect(root.textContent).not.toContain("対義語");
+    expect(root.textContent).toContain("Choose subtle for understated meaning");
+    expect(root.textContent).not.toContain("SHOULD_NOT_RENDER");
   });
 
   it("renders partial streaming content before final validation", () => {
@@ -204,8 +190,17 @@ describe("PopupView", () => {
       },
       partial: {
         headword: "subtle",
-        translations: [{ text: "微妙な", note: "形容詞" }],
-        nuance: "露骨ではなく、注意して初めて伝わる感じ。",
+        translations: [
+          {
+            text: "delicate",
+            note: TRANSLATION_NOTE_VALUES[2],
+            example: {
+              sentence: "The room had a subtle scent.",
+              japanese: "The room had a subtle scent.",
+            },
+          },
+        ],
+        nuance: "Understated rather than obvious.",
         synonyms: [],
         warnings: [],
       },
@@ -213,10 +208,10 @@ describe("PopupView", () => {
 
     const root = renderPopup(state);
 
-    expect(root.textContent).toContain("生成中");
     expect(root.textContent).toContain("subtle");
-    expect(root.textContent).toContain("微妙な");
-    expect(root.textContent).toContain("露骨ではなく");
+    expect(root.textContent).toContain("delicate");
+    expect(root.textContent).toContain("The room had a subtle scent.");
+    expect(root.textContent).toContain("Understated rather than obvious.");
   });
 
   it("renders user-safe errors and diagnostics", () => {
@@ -241,8 +236,9 @@ describe("PopupView", () => {
 
     const root = renderPopup(state);
 
-    expect(root.textContent).toContain("確認が必要");
-    expect(root.textContent).toContain("This app does not expose selected text to Lexi.");
+    expect(root.textContent).toContain(
+      "This app does not expose selected text to Lexi.",
+    );
     expect(root.textContent).toContain("SelectionUnsupported");
     expect(root.textContent).toContain("uia-foreground-window");
     expect(root.textContent).toContain("example.exe");
@@ -261,25 +257,14 @@ describe("PopupView", () => {
       warning: "API key is not configured; showing default models.",
     });
     const onSaveSettings = vi.fn(async () => undefined);
+    const onToggleTheme = vi.fn();
     const root = document.createElement("div");
     document.body.appendChild(root);
-    const state: PopupState = {
-      kind: "ready",
-      shortcut: "Ctrl+Shift+X",
-      capture: {
-        captureMethod: "uia-foreground-window",
-        sourceProcess: "notepad.exe",
-        sourceWindowTitle: "note.txt - Notepad",
-        characterCount: 42,
-        multiline: true,
-      },
-      result: mockResult(),
-    };
 
     render(
       () => (
         <PopupView
-          state={state}
+          state={readyState()}
           settingsOpen
           providerSettings={{
             provider: "gemini",
@@ -289,9 +274,11 @@ describe("PopupView", () => {
             apiKeyConfigured: false,
           }}
           activeResultTab="meaning"
+          themeMode="light"
           onClose={noop}
           onRetry={noop}
           onToggleSettings={noop}
+          onToggleTheme={onToggleTheme}
           onSaveSettings={onSaveSettings}
           onSetResultTab={noop}
         />
@@ -300,7 +287,13 @@ describe("PopupView", () => {
     );
 
     expect(root.textContent).toContain("Provider");
+    expect(root.textContent).toContain("Theme");
+    expect(root.textContent).toContain("Dark");
     expect(root.textContent).toContain("Gemini");
+    expect(root.textContent).not.toContain("Close");
+    expect(root.querySelector(".settings-save")?.hasAttribute("disabled")).toBe(
+      true,
+    );
     expect(
       Array.from(root.querySelectorAll("select")).some(
         (select) => select.value === "gemini-2.5-flash-lite",
@@ -314,6 +307,10 @@ describe("PopupView", () => {
     expect(invoke).toHaveBeenCalledWith("list_provider_models", {
       provider: "gemini",
     });
+    const themeButton = root.querySelector(".settings-theme-toggle");
+    expect(themeButton).toBeInstanceOf(HTMLButtonElement);
+    themeButton!.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    expect(onToggleTheme).toHaveBeenCalledOnce();
 
     root.remove();
   });
@@ -331,23 +328,11 @@ describe("PopupView", () => {
     const onSaveSettings = vi.fn(async () => undefined);
     const root = document.createElement("div");
     document.body.appendChild(root);
-    const state: PopupState = {
-      kind: "ready",
-      shortcut: "Ctrl+Shift+X",
-      capture: {
-        captureMethod: "uia-foreground-window",
-        sourceProcess: "notepad.exe",
-        sourceWindowTitle: "note.txt - Notepad",
-        characterCount: 42,
-        multiline: true,
-      },
-      result: mockResult(),
-    };
 
     render(
       () => (
         <PopupView
-          state={state}
+          state={readyState()}
           settingsOpen
           providerSettings={{
             provider: "gemini",
@@ -357,9 +342,11 @@ describe("PopupView", () => {
             apiKeyConfigured: true,
           }}
           activeResultTab="meaning"
+          themeMode="light"
           onClose={noop}
           onRetry={noop}
           onToggleSettings={noop}
+          onToggleTheme={noop}
           onSaveSettings={onSaveSettings}
           onSetResultTab={noop}
         />
@@ -370,15 +357,20 @@ describe("PopupView", () => {
     await Promise.resolve();
     const selects = Array.from(root.querySelectorAll("select"));
     const modelSelect = selects.find((select) =>
-      Array.from(select.options).some((option) => option.value === "gemini-2.5-flash"),
+      Array.from(select.options).some(
+        (option) => option.value === "gemini-2.5-flash",
+      ),
     );
     expect(modelSelect).toBeInstanceOf(HTMLSelectElement);
 
     modelSelect!.value = "gemini-2.5-flash";
     modelSelect!.dispatchEvent(new Event("change", { bubbles: true }));
-    root.querySelector("form")?.dispatchEvent(
-      new Event("submit", { bubbles: true, cancelable: true }),
+    expect(root.querySelector(".settings-save")?.hasAttribute("disabled")).toBe(
+      false,
     );
+    root
+      .querySelector("form")
+      ?.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true }));
     await Promise.resolve();
 
     expect(onSaveSettings).toHaveBeenCalledWith({
@@ -390,6 +382,35 @@ describe("PopupView", () => {
     });
 
     root.remove();
+  });
+});
+
+describe("Lexi result schema", () => {
+  it("rejects translation notes that are not part-of-speech labels", () => {
+    const result = mockResult();
+    result.translations[0].note = "math" as never;
+
+    expect(validateLexiResultV1(result)).toEqual({
+      ok: false,
+      reason: "translations must be a non-empty array with part-of-speech notes",
+    });
+  });
+
+  it("allows empty synonyms", () => {
+    const result = mockResult();
+    result.synonyms = [];
+
+    expect(validateLexiResultV1(result).ok).toBe(true);
+  });
+
+  it("rejects translation entries without examples", () => {
+    const result = mockResult();
+    result.translations[0].example = null as never;
+
+    expect(validateLexiResultV1(result)).toEqual({
+      ok: false,
+      reason: "translations must be a non-empty array with part-of-speech notes",
+    });
   });
 });
 
@@ -429,6 +450,7 @@ describe("App stream flow", () => {
       payload: {
         status: "started",
         requestId: 42,
+        selectedTextPreview: "subtle",
         shortcut: "Ctrl+Shift+X",
         captureMethod: "uia-foreground-window",
         sourceProcess: "notepad.exe",
@@ -439,24 +461,23 @@ describe("App stream flow", () => {
         model: "gemini-2.5-flash-lite",
       },
     });
+    expect(root.textContent).toContain("subtle");
     tauriMocks.listeners["lexi:transform"][0]({
       payload: {
         status: "failed",
         requestId: 42,
         error: {
           code: "InvalidModelOutput",
-          userMessage: "結果を表示できませんでした。",
+          userMessage: "The result could not be displayed.",
           diagnosticMessage: "provider stream completed without JSON content",
           retryable: true,
         },
       },
     });
 
-    const retryButton = Array.from(root.querySelectorAll("button")).find(
-      (button) => button.textContent === "再試行",
-    );
+    const retryButton = root.querySelector(".error-actions button");
     expect(retryButton).toBeInstanceOf(HTMLButtonElement);
-    retryButton!.click();
+    retryButton!.dispatchEvent(new MouseEvent("click", { bubbles: true }));
     await Promise.resolve();
 
     expect(invoke).toHaveBeenCalledWith("run_transform_stream", {

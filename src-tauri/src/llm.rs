@@ -1,7 +1,8 @@
 use crate::{
     errors::AppError,
     schema::{
-        parse_lexi_result_v1, LexiResultV1, RelatedWord, Translation, LEXI_RESULT_V1_SCHEMA_VERSION,
+        parse_lexi_result_v1, ExampleSentence, LexiResultV1, RelatedWord, Translation,
+        LEXI_RESULT_V1_SCHEMA_VERSION, TRANSLATION_NOTE_VALUES,
     },
     settings::{ProviderKind, SettingsState},
 };
@@ -110,6 +111,7 @@ struct StreamTextDelta {
 pub enum TransformEvent {
     Started {
         request_id: u64,
+        selected_text_preview: String,
         shortcut: String,
         capture_method: &'static str,
         source_process: Option<String>,
@@ -172,17 +174,14 @@ impl LlmProvider for MockProvider {
             mode: "word-study".to_string(),
             source_language: "auto".to_string(),
             result_language: request.result_language.clone(),
-            headword: request
-                .selected_text
-                .split_whitespace()
-                .next()
-                .unwrap_or("selection")
-                .chars()
-                .take(48)
-                .collect(),
+            headword: mock_headword(&request.selected_text),
             translations: vec![crate::schema::Translation {
                 text: "確認用の訳語".to_string(),
-                note: Some("mock provider".to_string()),
+                note: None,
+                example: ExampleSentence {
+                    sentence: "This is a short example from the mock provider.".to_string(),
+                    japanese: "これはモックプロバイダーによる短い例文です。".to_string(),
+                },
             }],
             nuance: "MockProvider による構造化レスポンスです。".to_string(),
             synonyms: vec![],
@@ -191,6 +190,39 @@ impl LlmProvider for MockProvider {
             ],
         })
     }
+}
+
+fn mock_headword(selected_text: &str) -> String {
+    let first_word = selected_text
+        .split_whitespace()
+        .next()
+        .unwrap_or("selection")
+        .trim_matches(|character: char| !character.is_alphanumeric())
+        .to_ascii_lowercase();
+
+    let lemma = match first_word.as_str() {
+        "went" | "gone" => "go".to_string(),
+        "ran" => "run".to_string(),
+        "studied" => "study".to_string(),
+        "better" | "best" => "good".to_string(),
+        word if word.ends_with("ied") && word.len() > 4 => {
+            format!("{}y", &word[..word.len() - 3])
+        }
+        word if word.ends_with("ed") && word.len() > 3 => word[..word.len() - 2].to_string(),
+        word => word.to_string(),
+    };
+
+    lemma.chars().take(48).collect()
+}
+
+fn selected_text_preview(selected_text: &str) -> String {
+    selected_text
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+        .chars()
+        .take(48)
+        .collect()
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -295,6 +327,7 @@ async fn run_transform_stream_for_capture(
 ) -> Result<(), AppError> {
     let settings_state = app.state::<SettingsState>();
     let settings = settings_state.load_settings(&app)?;
+    let selected_text_preview = selected_text_preview(&selected_text);
     let request = TransformRequest {
         selected_text,
         result_language: settings.result_language.clone(),
@@ -305,6 +338,7 @@ async fn run_transform_stream_for_capture(
         TRANSFORM_EVENT,
         TransformEvent::Started {
             request_id,
+            selected_text_preview,
             shortcut: capture.shortcut,
             capture_method: capture.capture_method,
             source_process: capture.source_process,
@@ -459,22 +493,35 @@ Hard requirements:
 - Do not include markdown, prose outside JSON, comments, or code fences.
 - Use resultLanguage "{result_language}" for all explanations and Japanese meaning fields.
 - Keep the result compact enough for a small desktop popup.
-- If the selection is a sentence, choose the central word or phrase as headword.
+- If the selection is a single inflected word, set headword to its dictionary/base form, not the selected surface form. Examples: went -> go, ran -> run, studied -> study, better -> good.
+- If the selection is a sentence, choose the central word or phrase as headword and normalize that headword to its dictionary/base form when possible.
 - If reliable synonyms are unavailable, use an empty array instead of guessing.
 
 Field contract:
-- headword: canonical lemma or short phrase, max 48 characters.
-- translations: 1 to 3 concise meanings. note is only part of speech or register, max 16 characters, or null.
+- headword: canonical dictionary/base form or short phrase, max 48 characters. Do not copy an inflected selected word such as a past-tense verb when a base form is known.
+- translations: dictionary-style Japanese sense entries, not nuance explanations or synonym lists. Return 1 to 3 items only when each item represents a distinct dictionary sense.
+  - text must be a compact Japanese equivalent or established Japanese expression that can stand as a dictionary meaning entry.
+  - Separate entries by dictionary sense boundaries such as part of speech, countable vs uncountable use, transitive vs intransitive use, concrete vs abstract use, or established idiomatic use.
+  - Do not create multiple entries by rephrasing the same sense, changing formality, or offering Japanese synonyms. For example, "近づく" and "接近する" are the same sense; keep only the natural broad entry "近づく".
+  - If candidates differ only in wording, kanji/kana style, formality, specificity, or explanation length, keep the broadest common dictionary equivalent and omit the rest.
+  - Do not output sentence-like glosses, usage explanations, source-text summaries, or "X after Y" definitions. Put usage feel in nuance instead.
+  - note must be null or exactly one part-of-speech label from this list: 名詞, 動詞, 形容詞, 副詞, 前置詞, 接続詞, 代名詞, 助動詞, 冠詞, 間投詞, 句, 成句, 接頭辞, 接尾辞. Do not use semantic domains such as 数学, 数, 比, 専門, or technical field labels in note.
+  - example is required for every translation item and must demonstrate that specific sense.
+    - example.sentence: a simple English sentence, max 96 characters. Prefer common daily contexts and do not quote sensitive selected text unless necessary.
+    - example.japanese: natural Japanese translation of example.sentence, max 96 characters.
 - nuance: exactly 1 sentence, max 90 Japanese characters or 22 English words. Give an intuitive explanation that helps the user decide when the headword is appropriate.
 - synonyms: 2 to 4 near words that are useful for learning how to use the headword more precisely. Do not include antonyms.
   - term: a real common near word.
   - japanese: concise meaning.
-  - nuance: the synonym's own intuitive feel, max 60 Japanese characters.
   - usageComparison: one direct sentence comparing the synonym with the headword. Explain when to choose the headword and when to choose this synonym, max 110 Japanese characters.
 - warnings: empty unless the input is ambiguous, too short, not a word/phrase, or confidence is low.
 
 Quality rules:
 - Prefer precision over coverage.
+- For translations, prefer dictionary sense entries over explanations. Use nuance for explanations, not translations.
+- Before finalizing translations, compare every pair of translation entries. Merge or delete overlapping Japanese meanings unless they differ by a real dictionary sense boundary.
+- A Japanese synonym, register difference, or wording preference is not a sense boundary. Do not split entries for pairs like 近づく/接近する, 始める/開始する, 使う/使用する, わずかな/少しの.
+- Keep each translation example short and aligned with that translation's specific sense.
 - Do not repeat the same information across headword nuance and synonym usageComparison.
 - Do not pad arrays to hit counts.
 - Preserve selected text privacy; never quote more than needed for headword/examples.
@@ -656,33 +703,56 @@ fn lexi_result_schema() -> Value {
             "translations": {
                 "type": "array",
                 "minItems": 1,
+                "maxItems": 3,
                 "items": {
                     "type": "object",
                     "additionalProperties": false,
-                    "required": ["text", "note"],
+                    "required": ["text", "note", "example"],
                     "properties": {
                         "text": { "type": "string" },
-                        "note": { "type": ["string", "null"] }
+                        "note": translation_note_json_schema(),
+                        "example": { "$ref": "#/$defs/exampleSentence" }
                     }
                 }
             },
             "nuance": { "type": "string" },
-            "synonyms": { "type": "array", "minItems": 1, "maxItems": 4, "items": { "$ref": "#/$defs/relatedWord" } },
+            "synonyms": { "type": "array", "minItems": 0, "maxItems": 4, "items": { "$ref": "#/$defs/relatedWord" } },
             "warnings": { "type": "array", "items": { "type": "string" } }
         },
         "$defs": {
+            "exampleSentence": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["sentence", "japanese"],
+                "properties": {
+                    "sentence": { "type": "string" },
+                    "japanese": { "type": "string" }
+                }
+            },
             "relatedWord": {
                 "type": "object",
                 "additionalProperties": false,
-                "required": ["term", "japanese", "nuance", "usageComparison"],
+                "required": ["term", "japanese", "usageComparison"],
                 "properties": {
                     "term": { "type": "string" },
                     "japanese": { "type": "string" },
-                    "nuance": { "type": "string" },
                     "usageComparison": { "type": "string" }
                 }
             }
         }
+    })
+}
+
+fn translation_note_json_schema() -> Value {
+    let mut values = TRANSLATION_NOTE_VALUES
+        .iter()
+        .map(|value| json!(value))
+        .collect::<Vec<_>>();
+    values.push(Value::Null);
+
+    json!({
+        "type": ["string", "null"],
+        "enum": values
     })
 }
 
@@ -1054,18 +1124,41 @@ fn gemini_lexi_result_schema() -> Value {
             "headword": { "type": "STRING" },
             "translations": {
                 "type": "ARRAY",
+                "minItems": 1,
+                "maxItems": 3,
                 "items": {
                     "type": "OBJECT",
-                    "required": ["text", "note"],
+                    "required": ["text", "note", "example"],
                     "properties": {
                         "text": { "type": "STRING" },
-                        "note": { "type": "STRING", "nullable": true }
+                        "note": {
+                            "type": "STRING",
+                            "nullable": true,
+                            "enum": TRANSLATION_NOTE_VALUES
+                        },
+                        "example": gemini_example_sentence_schema()
                     }
                 }
             },
             "nuance": { "type": "STRING" },
-            "synonyms": { "type": "ARRAY", "items": gemini_related_word_schema() },
+            "synonyms": {
+                "type": "ARRAY",
+                "minItems": 0,
+                "maxItems": 4,
+                "items": gemini_related_word_schema()
+            },
             "warnings": { "type": "ARRAY", "items": { "type": "STRING" } }
+        }
+    })
+}
+
+fn gemini_example_sentence_schema() -> Value {
+    json!({
+        "type": "OBJECT",
+        "required": ["sentence", "japanese"],
+        "properties": {
+            "sentence": { "type": "STRING" },
+            "japanese": { "type": "STRING" }
         }
     })
 }
@@ -1073,11 +1166,10 @@ fn gemini_lexi_result_schema() -> Value {
 fn gemini_related_word_schema() -> Value {
     json!({
         "type": "OBJECT",
-        "required": ["term", "japanese", "nuance", "usageComparison"],
+        "required": ["term", "japanese", "usageComparison"],
         "properties": {
             "term": { "type": "STRING" },
             "japanese": { "type": "STRING" },
-            "nuance": { "type": "STRING" },
             "usageComparison": { "type": "STRING" }
         }
     })
@@ -1297,8 +1389,9 @@ struct GeminiPart {
 #[cfg(test)]
 mod tests {
     use super::{
+        build_word_study_prompt, gemini_lexi_result_schema, lexi_result_schema, mock_headword,
         parse_gemini_stream_text, parse_openai_stream_text, parse_sse_event_text, pop_sse_event,
-        provider_finish_reason_indicates_truncation, sse_data_payload,
+        provider_finish_reason_indicates_truncation, selected_text_preview, sse_data_payload,
     };
 
     #[test]
@@ -1373,5 +1466,110 @@ mod tests {
         assert!(provider_finish_reason_indicates_truncation("MAX_TOKENS"));
         assert!(provider_finish_reason_indicates_truncation("length"));
         assert!(!provider_finish_reason_indicates_truncation("STOP"));
+    }
+
+    #[test]
+    fn openai_schema_matches_result_validation_cardinality() {
+        let schema = lexi_result_schema();
+
+        assert_eq!(schema["properties"]["translations"]["minItems"], 1);
+        assert_eq!(schema["properties"]["translations"]["maxItems"], 3);
+        assert_eq!(
+            schema["properties"]["translations"]["items"]["required"][2],
+            "example"
+        );
+        assert_eq!(
+            schema["properties"]["translations"]["items"]["properties"]["note"]["enum"][0],
+            "名詞"
+        );
+        assert!(
+            schema["properties"]["translations"]["items"]["properties"]["note"]["enum"]
+                .as_array()
+                .expect("note enum")
+                .contains(&serde_json::Value::Null)
+        );
+        assert_eq!(schema["properties"]["synonyms"]["minItems"], 0);
+        assert_eq!(schema["properties"]["synonyms"]["maxItems"], 4);
+        assert!(!schema["$defs"]["relatedWord"]["required"]
+            .as_array()
+            .expect("related word required")
+            .contains(&serde_json::Value::String("nuance".to_string())));
+    }
+
+    #[test]
+    fn gemini_schema_matches_result_validation_cardinality() {
+        let schema = gemini_lexi_result_schema();
+
+        assert_eq!(schema["properties"]["translations"]["minItems"], 1);
+        assert_eq!(schema["properties"]["translations"]["maxItems"], 3);
+        assert_eq!(
+            schema["properties"]["translations"]["items"]["required"][2],
+            "example"
+        );
+        assert_eq!(
+            schema["properties"]["translations"]["items"]["properties"]["note"]["enum"][0],
+            "名詞"
+        );
+        assert_eq!(schema["properties"]["synonyms"]["minItems"], 0);
+        assert_eq!(schema["properties"]["synonyms"]["maxItems"], 4);
+        assert!(!schema["properties"]["synonyms"]["items"]["required"]
+            .as_array()
+            .expect("related word required")
+            .contains(&serde_json::Value::String("nuance".to_string())));
+    }
+
+    #[test]
+    fn prompt_requires_single_word_headword_lemma() {
+        let prompt = build_word_study_prompt(&super::TransformRequest {
+            selected_text: "went".to_string(),
+            result_language: "ja".to_string(),
+            prompt_mode: "word-study".to_string(),
+        });
+
+        assert!(prompt.contains("single inflected word"));
+        assert!(prompt.contains("went -> go"));
+        assert!(prompt.contains("dictionary/base form"));
+        assert!(prompt.contains("part-of-speech label"));
+        assert!(prompt.contains("数学"));
+        assert!(prompt.contains("dictionary-style Japanese sense entries"));
+        assert!(prompt.contains("part of speech, countable vs uncountable use"));
+        assert!(prompt.contains("Do not create multiple entries by rephrasing the same sense"));
+        assert!(prompt.contains("近づく"));
+        assert!(prompt.contains("接近する"));
+        assert!(prompt.contains("Merge or delete overlapping Japanese meanings"));
+        assert!(prompt.contains("example is required for every translation item"));
+    }
+
+    #[test]
+    fn mock_provider_displays_base_form_for_common_inflections() {
+        assert_eq!(mock_headword("went"), "go");
+        assert_eq!(mock_headword("studied"), "study");
+        assert_eq!(mock_headword("walked"), "walk");
+    }
+
+    #[test]
+    fn selected_text_preview_collapses_whitespace_and_truncates() {
+        assert_eq!(selected_text_preview("  subtle\nchange  "), "subtle change");
+        assert_eq!(selected_text_preview(&"a".repeat(50)).chars().count(), 48);
+    }
+
+    #[test]
+    fn started_event_serializes_selected_text_preview() {
+        let value = serde_json::to_value(super::TransformEvent::Started {
+            request_id: 7,
+            selected_text_preview: "subtle".to_string(),
+            shortcut: "Ctrl+Shift+X".to_string(),
+            capture_method: "uia-foreground-window",
+            source_process: Some("notepad.exe".to_string()),
+            source_window_title: None,
+            character_count: 6,
+            multiline: false,
+            provider: crate::settings::ProviderKind::Mock,
+            model: "mock-word-study".to_string(),
+        })
+        .expect("started event serializes");
+
+        assert_eq!(value["status"], "started");
+        assert_eq!(value["selectedTextPreview"], "subtle");
     }
 }

@@ -87,17 +87,19 @@ Phase 5 backend transform event:
 
 - `lexi:transform`
 - Emits `started`, `streaming`, `validating`, `ready`, or `failed`.
+- `started` carries a whitespace-normalized, 48-character `selectedTextPreview` so the popup can show the selected word immediately after the provider request begins.
 - `streaming` and `validating` carry a `LexiPartialResult` extracted from completed JSON fields only: headword, translations, nuance, synonyms, and warnings.
-- Raw selected text, raw prompt bodies, raw model chunks, and API keys are not emitted to the frontend.
+- Full raw selected text, raw prompt bodies, raw model chunks, and API keys are not emitted to the frontend; `selectedTextPreview` is the narrow UI-display exception.
 
 Phase 4 popup state:
 
 - Solid state variants are `idle`, `capturing`, `requesting`, `ready`, and `error`.
 - `captured` events are treated as redacted metadata only and transition into a mock `requesting` state.
 - The frontend validates the mock `LexiResultV1` with `validateLexiResultV1` before rendering the `ready` state.
-- The Phase 4 mock word-study result renders compact Japanese panes for meaning and related words. Nuance is shown next to the headword, and usage comparisons are folded into expandable related-word rows.
+- The word-study result renders as a single dictionary-card surface modeled after the editorial preview: a headword header, a nuance callout, translation rows with part-of-speech marks and examples, and similar-word rows with expandable usage comparisons.
 - Result actions are copy, retry, close, and settings. Copy writes only the structured mock result text, not captured source text.
 - Phase 5 removes the bottom result action bar. Settings opens from a header gear button and exposes provider, provider-backed model dropdown, embedded result-language dropdown, and API key update fields.
+- The popup window opens at a 500 by 620 default size with 360 by 360 minimum constraints and remains resizable. The frontend shell uses responsive constraints and pane-level scrolling so long result text does not clip at narrow widths.
 
 Temporary PoC binary:
 
@@ -145,7 +147,7 @@ Initial provider policy:
 - API key values are accepted from the settings UI but are never returned to the frontend after save.
 - Gemini and OpenAI transform calls use provider streaming endpoints where available. Partial JSON is accumulated in Rust, then only completed schema fields are emitted as partial UI state. The final response must still pass strict `LexiResultV1` validation before the app treats it as complete.
 
-Provider responses must be parsed into a versioned Rust struct before frontend rendering. The frontend should render validated data, not raw model text. For the first workflow, the model is expected to return structured word-study data: Japanese translations, an intuitive usage nuance for the headword, near-word synonyms with per-word usage comparisons, and warnings when useful data is unavailable. Antonyms are omitted from the current result contract.
+Provider responses must be parsed into a versioned Rust struct before frontend rendering. The frontend should render validated data, not raw model text. For the first workflow, the model is expected to return structured word-study data: a dictionary/base-form headword for single inflected words, one to three dictionary-style Japanese sense entries with a `null` or enumerated part-of-speech note, one short example sentence plus Japanese translation per sense entry, an intuitive usage nuance for the headword, optional near-word synonyms with per-word usage comparisons, and warnings when useful data is unavailable. Translation entries should be separated by real dictionary sense boundaries such as part of speech, countability, transitivity, concrete versus abstract use, or idiomatic use, and should collapse near-duplicate Japanese paraphrases instead of filling the list with repeated explanations or Japanese synonyms such as `近づく` and `接近する`. Antonyms are omitted from the current result contract.
 
 ## Security and Privacy
 

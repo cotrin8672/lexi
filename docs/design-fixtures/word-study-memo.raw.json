@@ -1,0 +1,176 @@
+{
+  "fixtureVersion": "lexi.design.word-study-memo.raw.v1",
+  "scenario": "global-shortcut-selection-to-word-study-result",
+  "capturedAt": "2026-05-27T22:30:00+09:00",
+  "designerIntent": "縺薙・JSON繧偵∬ｪ槫ｽ吶Γ繝｢UI繧定ｨｭ險医☆繧九◆繧√・譛ｪ謨ｴ蠖｢繝・・繧ｿ縺ｨ縺励※謇ｱ縺・ゆｸｻ縺ｫ陦ｨ遉ｺ縺吶ｋ蟇ｾ雎｡縺ｯ providerStructuredResponse縲・,
+  "popup": {
+    "state": "ready",
+    "shortcut": "Ctrl+Shift+X",
+    "activeResultTab": "meaning"
+  },
+  "capture": {
+    "captureMethod": "uia-focused-element",
+    "sourceProcess": "zotero.exe",
+    "sourceWindowTitle": "Article notes - Zotero",
+    "characterCount": 48,
+    "multiline": false,
+    "selectedTextPreview": {
+      "redacted": true,
+      "display": "[驕ｸ謚槭ユ繧ｭ繧ｹ繝医・讖溷ｯ・ュ蝣ｱ縺ｨ縺励※fixture縺ｫ菫晏ｭ倥＠縺ｪ縺Ь"
+    }
+  },
+  "request": {
+    "mode": "word-study",
+    "provider": "gemini",
+    "model": "gemini-2.5-flash-lite",
+    "sourceLanguage": "auto",
+    "resultLanguage": "ja",
+    "streaming": true
+  },
+  "providerStructuredResponse": {
+    "schemaVersion": "lexi.result.v1",
+    "mode": "word-study",
+    "sourceLanguage": "en",
+    "resultLanguage": "ja",
+    "headword": "subtle",
+    "translations": [
+      {
+        "text": "蠕ｮ螯吶↑",
+        "note": "蠖｢螳ｹ隧・,
+        "example": {
+          "sentence": "She noticed a subtle change in his voice.",
+          "japanese": "蠖ｼ螂ｳ縺ｯ蠖ｼ縺ｮ螢ｰ縺ｮ蠕ｮ螯吶↑螟牙喧縺ｫ豌励▼縺・◆縲・
+        }
+      },
+      {
+        "text": "蟾ｧ螯吶↑",
+        "note": "蠖｢螳ｹ隧・,
+        "example": {
+          "sentence": "The ad used subtle humor to make its point.",
+          "japanese": "縺昴・蠎・相縺ｯ蟾ｧ螯吶↑繝ｦ繝ｼ繝｢繧｢縺ｧ荳ｻ蠑ｵ繧剃ｼ昴∴縺溘・
+        }
+      }
+    ],
+    "nuance": "蟆上＆縺冗ｹ顔ｴｰ縺ｧ縲∵ｳｨ諢上＠縺ｦ縺・↑縺・→隕玖誠縺ｨ縺励ｄ縺吶＞驕輔＞繧定｡ｨ縺吶・,
+    "synonyms": [
+      {
+        "term": "delicate",
+        "japanese": "郢顔ｴｰ縺ｪ",
+        "usageComparison": "subtle 縺ｯ豌励▼縺阪↓縺上＆縲‥elicate 縺ｯ邏ｰ縺九＆繧・す縺､縺阪ｄ縺吶＆縺ｫ辟ｦ轤ｹ縺後≠繧九・
+      },
+      {
+        "term": "faint",
+        "japanese": "縺九☆縺九↑",
+        "usageComparison": "subtle 縺ｯ諢丞袖繧・＆縺・・隕九∴縺ｫ縺上＆縺ｫ繧ゆｽｿ縺医ｋ縺後’aint 縺ｯ諢溯ｦ夂噪縺ｪ蠑ｱ縺輔↓蟇・ｋ縲・
+      },
+      {
+        "term": "nuanced",
+        "japanese": "蜷ｫ縺ｿ縺ｮ縺ゅｋ",
+        "usageComparison": "subtle 縺ｯ豌励▼縺阪↓縺上＞諤ｧ雉ｪ蜈ｨ闊ｬ縲］uanced 縺ｯ隗｣驥医ｄ諢丞袖縺ｮ螻､縺後≠繧句ｴ蜷医↓菴ｿ縺・・
+      }
+    ],
+    "warnings": []
+  },
+  "streamEvents": [
+    {
+      "status": "started",
+      "requestId": 42,
+      "provider": "gemini",
+      "model": "gemini-2.5-flash-lite"
+    },
+    {
+      "status": "streaming",
+      "requestId": 42,
+      "partial": {
+        "headword": "subtle",
+        "translations": [],
+        "nuance": null,
+        "synonyms": [],
+        "warnings": []
+      }
+    },
+    {
+      "status": "streaming",
+      "requestId": 42,
+      "partial": {
+        "headword": "subtle",
+        "translations": [
+          {
+            "text": "蠕ｮ螯吶↑",
+            "note": "蠖｢螳ｹ隧・,
+            "example": {
+              "sentence": "She noticed a subtle change in his voice.",
+              "japanese": "蠖ｼ螂ｳ縺ｯ蠖ｼ縺ｮ螢ｰ縺ｮ蠕ｮ螯吶↑螟牙喧縺ｫ豌励▼縺・◆縲・
+            }
+          }
+        ],
+        "nuance": "蟆上＆縺冗ｹ顔ｴｰ縺ｧ縲∵ｳｨ諢上＠縺ｦ縺・↑縺・→隕玖誠縺ｨ縺励ｄ縺吶＞驕輔＞繧定｡ｨ縺吶・,
+        "synonyms": [],
+        "warnings": []
+      }
+    }
+  ],
+  "alternateStates": {
+    "idle": {
+      "state": "idle",
+      "shortcut": "Ctrl+Shift+X"
+    },
+    "capturing": {
+      "state": "capturing",
+      "shortcut": "Ctrl+Shift+X"
+    },
+    "requesting": {
+      "state": "requesting",
+      "shortcut": "Ctrl+Shift+X",
+      "capture": {
+        "captureMethod": "uia-focused-element",
+        "sourceProcess": "zotero.exe",
+        "sourceWindowTitle": "Article notes - Zotero",
+        "characterCount": 48,
+        "multiline": false
+      }
+    },
+    "error": {
+      "state": "error",
+      "shortcut": "Ctrl+Shift+X",
+      "error": {
+        "code": "InvalidModelOutput",
+        "userMessage": "邨先棡縺ｮ蠖｢蠑上ｒ遒ｺ隱阪〒縺阪∪縺帙ｓ縺ｧ縺励◆縲・,
+        "diagnosticMessage": "field 'translations[0].example.japanese' is empty",
+        "retryable": true
+      },
+      "context": {
+        "selectionErrorCode": "InvalidModelOutput",
+        "captureMethod": "uia-focused-element",
+        "sourceProcess": "zotero.exe",
+        "sourceWindowTitle": "Article notes - Zotero",
+        "retryCapture": {
+          "captureMethod": "uia-focused-element",
+          "sourceProcess": "zotero.exe",
+          "sourceWindowTitle": "Article notes - Zotero",
+          "characterCount": 48,
+          "multiline": false
+        }
+      }
+    }
+  },
+  "displayPriorities": [
+    "headword",
+    "translations[].text",
+    "translations[].note",
+    "nuance",
+    "translations[].example",
+    "synonyms[].term",
+    "synonyms[].japanese",
+    "synonyms[].usageComparison",
+    "warnings"
+  ],
+  "fieldNotes": {
+    "providerStructuredResponse": "繧ｹ繧ｭ繝ｼ繝樊､懆ｨｼ蠕後・LLM讒矩蛹悶Ξ繧ｹ繝昴Φ繧ｹ縲りｪ槫ｽ吶Γ繝｢逕ｻ髱｢縺ｮ荳ｻ縺ｪ陦ｨ遉ｺ繧ｽ繝ｼ繧ｹ縲・,
+    "translations": "霎樊嶌逧・↑譌･譛ｬ隱櫁ｨｳ縲６I荳翫・1縺九ｉ3莉ｶ遞句ｺｦ繧呈Φ螳壹☆繧九・,
+    "note": "蜩∬ｩ槭Λ繝吶Ν縲ゆｸ肴・縺ｪ蝣ｴ蜷医・ null縲・,
+    "nuance": "縺昴・隱槭ｒ縺ｩ繧薙↑蝣ｴ髱｢縺ｧ菴ｿ縺・°蛻､譁ｭ縺吶ｋ縺溘ａ縺ｮ遏ｭ縺・ｪｬ譏弱・,
+    "synonyms": "菴ｿ縺・・縺代ｒ蟄ｦ縺ｶ縺溘ａ縺ｮ髢｢騾｣隱槭ら樟陦計1縺ｧ縺ｯ繝輔ぅ繝ｼ繝ｫ繝牙錐縺ｯ synonyms 縺ｧ縲∝ｯｾ鄒ｩ隱槭・蜷ｫ繧√↑縺・・,
+    "warnings": "菫｡鬆ｼ蠎ｦ縺御ｽ弱＞縲∝次譁・′譖匁乂縺ｪ縺ｩ縲√Θ繝ｼ繧ｶ繝ｼ縺ｫ隕九○縺ｦ繧ゅｈ縺・ｳｨ諢丈ｺ矩・・
+  }
+}
