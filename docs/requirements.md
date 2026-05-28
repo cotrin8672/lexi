@@ -14,7 +14,7 @@ In scope:
 
 - Windows-first desktop app built with Tauri v2, Rust, SolidJS, TypeScript, and Vite.
 - Global shortcut activation.
-- Selected-text acquisition through Windows UI Automation where supported.
+- Selected-text acquisition through a native Windows backend pipeline: clipboard-preserving copy first for low latency, then Windows UI Automation where supported.
 - Compact popup UI for loading, result, copy, retry, and error states.
 - One LLM transformation workflow with a typed output schema.
 - Local settings for shortcut, provider configuration, model name, API key state, and prompt preset.
@@ -25,7 +25,7 @@ Out of scope for the first release:
 - Cross-platform selected-text capture parity.
 - Long-term history, semantic search, or document library features.
 - Complex prompt marketplace or multi-agent orchestration.
-- Automatic clipboard overwrite as the primary capture mechanism.
+- Clipboard mutation without restoration or explicit user action.
 - Background processing of arbitrary windows without explicit shortcut activation.
 
 ## Functional Requirements
@@ -53,6 +53,7 @@ Out of scope for the first release:
 - Shortcut-to-popup feedback should feel immediate even when LLM processing is pending.
 - Shortcut-to-request latency should avoid unnecessary frontend command round trips after capture.
 - Raw selected text must not be written to logs.
+- Clipboard-based capture must restore the previous clipboard contents before returning.
 - Raw model stream chunks must not be emitted directly to the frontend.
 - API keys must not be stored in plaintext project files or plaintext app config files.
 - API keys must be read from dotenvx-injected environment variables first, with OS-backed secret storage on Windows as the fallback.
@@ -64,7 +65,7 @@ Out of scope for the first release:
 ## Technical Requirements
 
 - Use Tauri v2's command boundary for frontend-to-backend calls.
-- Use a dedicated Rust module for selection capture so UI Automation behavior is isolated from LLM and window code.
+- Use a dedicated Rust module for selection capture so clipboard and UI Automation behavior is isolated from LLM and window code.
 - Use a dedicated Rust module for LLM provider integration.
 - Use `serde` structs for command inputs, command outputs, provider responses, and UI error payloads.
 - Use Solid fine-grained state for popup state transitions: idle, capturing, requesting, ready, error.
@@ -149,12 +150,13 @@ Each error should include a stable code, a short user message, and a diagnostic 
 
 - Rust unit tests for schema validation, error mapping, and provider response parsing.
 - Frontend tests for popup state rendering and result rendering.
-- Manual Windows PoC matrix for selected-text capture before relying on UI Automation in product code.
+- Manual Windows PoC matrix for selected-text capture before relying on clipboard or UI Automation behavior in product code.
 - Build verification for Tauri integration before release.
 
 ## Risks and Mitigations
 
 - UI Automation support varies by app. Mitigation: run the PoC matrix first and keep unsupported-source handling explicit.
+- Clipboard-based capture can fail or be unsafe when the current clipboard contains formats Lexi cannot duplicate. Mitigation: fail before clearing the clipboard and fall back to UI Automation.
 - Global shortcut conflicts are common. Mitigation: make the shortcut configurable and expose registration failure clearly.
 - LLM output can drift from schema. Mitigation: validate strictly and version schemas.
 - Sensitive text can leak through logs. Mitigation: structured redaction and no raw payload logging.

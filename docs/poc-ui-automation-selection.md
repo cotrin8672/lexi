@@ -104,8 +104,11 @@ Current implementation:
 - Adds `selection::capture_selected_text()`, a temporary Tauri command named `capture_selection_diagnostics`, and a dev-only binary named `capture_selection_poc`.
 - The command returns only redacted metadata: success flag, stable code, source process when available, source window title, character count, and multiline flag.
 - The selected text is normalized to `\n` internally and is not returned to the frontend by the diagnostic command.
-- The capture path is strategy-based. It currently tries `uia-focused-element` and then `uia-foreground-window`.
-- Each strategy checks the target element and a bounded set of `TextPattern` descendants, then returns the first non-empty selection.
+- The capture path is backend-based. It currently tries `clipboard-copy` first, then UI Automation strategies.
+- The clipboard backend preserves the current clipboard, simulates `Ctrl+C`, reads Unicode text, and restores the clipboard before returning.
+- UI Automation capture runs on a dedicated STA worker thread that reuses COM initialization and the `CUIAutomation` instance across captures.
+- Each strategy checks the target element's `TextPattern` first, then a bounded set of `TextPattern` descendants only when direct capture is unavailable or empty.
+- Clipboard and UI Automation results share the same finalization path for line-ending normalization, empty-selection handling, source metadata, and diagnostics.
 - Diagnostics include `captureMethod` to make future app-specific fallback decisions without exposing raw selected text.
 
 Manual test command:

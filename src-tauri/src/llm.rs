@@ -418,6 +418,7 @@ impl TryFrom<TransformCaptureInput> for TransformCaptureMetadata {
 
     fn try_from(input: TransformCaptureInput) -> Result<Self, Self::Error> {
         let capture_method = match input.capture_method.as_str() {
+            "clipboard-copy" => "clipboard-copy",
             "uia-focused-element" => "uia-focused-element",
             "uia-foreground-window" => "uia-foreground-window",
             "clipboard-fallback" => "clipboard-fallback",

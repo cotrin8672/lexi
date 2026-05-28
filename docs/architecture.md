@@ -121,7 +121,9 @@ The Phase 3 implementation registers the default shortcut from Rust, so the fron
 
 Initial Windows strategy:
 
-- Use Windows UI Automation from Rust.
+- Use an ordered native capture backend pipeline from Rust:
+  - `clipboard-copy` first, using a clipboard-preserving `Ctrl+C` simulation for the lowest popup latency when the active app supports normal copy;
+  - UI Automation next, using a dedicated STA worker thread so COM initialization and the `CUIAutomation` instance are reused across shortcut captures.
 - Start from the focused or foreground automation element.
 - Query for TextPattern support.
 - Use GetSelection to read selected ranges.
@@ -130,11 +132,12 @@ Initial Windows strategy:
 - The Phase 1 PoC runs ordered capture strategies:
   - `uia-focused-element`;
   - `uia-foreground-window`.
-- Each strategy can inspect the current element and a bounded set of descendants with `IsTextPatternAvailable`.
+- Each strategy tries the current element's `TextPattern` before inspecting a bounded set of descendants with `IsTextPatternAvailable`.
+- Clipboard and UI Automation results pass through the same backend finalization path, including line-ending normalization, empty-selection handling, source metadata, and `captureMethod` diagnostics.
 - Diagnostics include the successful or final attempted `captureMethod` so app-specific limitations can be mapped without exposing selected text.
 - Future app-specific or fallback capture methods should be added as new strategies instead of branching the public command surface.
 
-Fallback strategies should be decided after PoC evidence. Clipboard simulation is intentionally not the first path because it can mutate user clipboard state and has higher privacy risk.
+The clipboard backend must preserve and restore the clipboard around the simulated copy. If the current clipboard contains a format Lexi cannot safely duplicate, the backend fails before clearing the clipboard and the pipeline falls back to UI Automation.
 
 ## LLM Strategy
 
