@@ -19,6 +19,7 @@
         "minWidth": 360,
         "minHeight": 360,
         "resizable": true,
+        "transparent": true,
         "visible": false,
         "alwaysOnTop": true
       }

@@ -182,6 +182,21 @@ describe("PopupView", () => {
     expect(root.querySelector(".error-actions")).toBeNull();
   });
 
+  it("does not clip an example when the headword is a stem inside an inflected word", () => {
+    const result = mockResult();
+    result.headword = "operate";
+    result.translations[0].example = {
+      sentence: "She operates a small business.",
+      japanese: "彼女は小さな会社を経営している。",
+    };
+
+    const root = renderPopup(readyState(result));
+
+    expect(root.querySelector(".example-en")?.textContent).toBe(
+      "She operates a small business.",
+    );
+  });
+
   it("renders related words as expandable rows with usage details but no per-entry nuance", () => {
     const result = mockResult() as LexiResultV1 & {
       synonyms: Array<LexiResultV1["synonyms"][number] & { nuance?: string }>;
@@ -395,6 +410,7 @@ describe("PopupView", () => {
     });
     const onSaveSettings = vi.fn(async () => undefined);
     const onToggleTheme = vi.fn();
+    const onSetBackgroundOpacity = vi.fn();
     const root = document.createElement("div");
     document.body.appendChild(root);
 
@@ -412,10 +428,12 @@ describe("PopupView", () => {
           }}
           activeResultTab="meaning"
           themeMode="light"
+          backgroundOpacity={0.3}
           onClose={noop}
           onRetry={noop}
           onToggleSettings={noop}
           onToggleTheme={onToggleTheme}
+          onSetBackgroundOpacity={onSetBackgroundOpacity}
           onSaveSettings={onSaveSettings}
           onSetResultTab={noop}
         />
@@ -425,6 +443,8 @@ describe("PopupView", () => {
 
     expect(root.textContent).toContain("Provider");
     expect(root.textContent).toContain("Theme");
+    expect(root.textContent).toContain("Background opacity");
+    expect(root.textContent).toContain("30%");
     expect(root.textContent).toContain("Dark");
     expect(root.textContent).toContain("Gemini");
     expect(root.textContent).not.toContain("Close");
@@ -448,6 +468,13 @@ describe("PopupView", () => {
     expect(themeButton).toBeInstanceOf(HTMLButtonElement);
     themeButton!.dispatchEvent(new MouseEvent("click", { bubbles: true }));
     expect(onToggleTheme).toHaveBeenCalledOnce();
+    const opacityInput = root.querySelector(
+      'input[type="range"]',
+    ) as HTMLInputElement;
+    expect(opacityInput).toBeInstanceOf(HTMLInputElement);
+    opacityInput.value = "0.45";
+    opacityInput.dispatchEvent(new Event("input", { bubbles: true }));
+    expect(onSetBackgroundOpacity).toHaveBeenCalledWith(0.45);
 
     root.remove();
   });

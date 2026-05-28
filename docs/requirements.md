@@ -40,6 +40,7 @@ Out of scope for the first release:
 - The app validates the response against the expected schema before rendering it.
 - The default low-cost provider is Gemini, with OpenAI available as the fallback provider when Gemini responses are not stable enough.
 - The user can change provider, model, result language, and API key from the popup settings panel.
+- The user can adjust the popup backdrop opacity from the popup settings panel.
 - Model settings are selected from a provider model-list endpoint when an API key is configured, with a small default fallback list when model-list retrieval is unavailable.
 - Result language settings are selected from an embedded dropdown list instead of a free-form text field.
 - The user can open settings from a gear button in the popup header.
@@ -74,8 +75,10 @@ Out of scope for the first release:
 - First screen is the actual popup/work surface, not a landing page.
 - The popup should open at a stable default size but remain user-resizable within minimum constraints; loading text, long words, and errors should wrap or scroll inside their panes instead of clipping.
 - Primary result rendering is a single dictionary-card layout with the headword, nuance, translations, and similar words visible in one scrollable surface.
+- The desktop popup window should support a transparent webview background, with the page backdrop rendered as a subtle translucent layer rather than an opaque full-window fill.
 - Pending capture and result areas should use skeleton placeholders instead of repeated loading text, so the result layout remains stable while streaming fields arrive.
 - Settings opens from a header gear button, not a bottom action bar.
+- Settings includes a compact backdrop opacity control that updates the translucent popup background immediately.
 - The current result view should not reserve a bottom action row for copy/retry/settings.
 - Avoid persistent instructional text in the main popup.
 - Use compact controls and clear state changes rather than decorative panels.

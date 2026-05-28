@@ -192,6 +192,7 @@ function App() {
   const [activeResultTab, setActiveResultTab] =
     createSignal<ResultTab>("meaning");
   const [themeMode, setThemeMode] = createSignal<ThemeMode>("light");
+  const [backgroundOpacity, setBackgroundOpacity] = createSignal(0.94);
   let activeRequestId: number | null = null;
 
   async function startTransform(shortcut: string, capture: CaptureMetadata) {
@@ -453,12 +454,14 @@ function App() {
       providerSettings={providerSettings()}
       activeResultTab={activeResultTab()}
       themeMode={themeMode()}
+      backgroundOpacity={backgroundOpacity()}
       onClose={closePopup}
       onRetry={retryCurrent}
       onToggleSettings={() => setSettingsOpen((open) => !open)}
       onToggleTheme={() =>
         setThemeMode((current) => (current === "dark" ? "light" : "dark"))
       }
+      onSetBackgroundOpacity={setBackgroundOpacity}
       onSaveSettings={async (update) => {
         const saved = await invoke<ProviderSettings>(
           "update_provider_settings",
@@ -478,31 +481,49 @@ export function PopupView(props: {
   providerSettings: ProviderSettings | null;
   activeResultTab: ResultTab;
   themeMode: ThemeMode;
+  backgroundOpacity?: number;
   onClose: () => void;
   onRetry: () => void;
   onToggleSettings: () => void;
   onToggleTheme: () => void;
+  onSetBackgroundOpacity?: (opacity: number) => void;
   onSaveSettings: (update: ProviderSettingsUpdate) => Promise<void>;
   onSetResultTab: (tab: ResultTab) => void;
 }) {
+  const backgroundOpacity = () => props.backgroundOpacity ?? 0.94;
+  const setBackgroundOpacity = (opacity: number) =>
+    props.onSetBackgroundOpacity?.(opacity);
+
   return (
     <main
       class={`popup-shell state-${props.state.kind} theme-${props.themeMode}`}
+      style={{ "--background-opacity": backgroundOpacity().toFixed(2) }}
     >
       <header class="lexi-header">
         <div class="title-block">
-          <p class="app-label">Lexi vocabulary note</p>
           <h1 class="headword">{headwordForState(props.state)}</h1>
         </div>
         <div class="header-actions">
           <button
-            class="button"
+            class="button icon-button"
             type="button"
             aria-label="設定"
             aria-expanded={props.settingsOpen}
             onClick={props.onToggleSettings}
           >
-            Settings
+            <svg
+              class="settings-icon"
+              aria-hidden="true"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              stroke-width="2"
+              stroke-linecap="round"
+              stroke-linejoin="round"
+            >
+              <path d="M12 15.5a3.5 3.5 0 1 0 0-7 3.5 3.5 0 0 0 0 7Z" />
+              <path d="M19.4 15a1.7 1.7 0 0 0 .34 1.88l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.7 1.7 0 0 0-1.88-.34 1.7 1.7 0 0 0-1.03 1.56V21a2 2 0 1 1-4 0v-.09a1.7 1.7 0 0 0-1.03-1.56 1.7 1.7 0 0 0-1.88.34l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06A1.7 1.7 0 0 0 4.6 15a1.7 1.7 0 0 0-1.56-1.03H3a2 2 0 1 1 0-4h.09A1.7 1.7 0 0 0 4.6 9a1.7 1.7 0 0 0-.34-1.88l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.7 1.7 0 0 0 9 4.6a1.7 1.7 0 0 0 1-1.56V3a2 2 0 1 1 4 0v.09a1.7 1.7 0 0 0 1.03 1.56 1.7 1.7 0 0 0 1.88-.34l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06A1.7 1.7 0 0 0 19.4 9c.2.61.79 1 1.42 1H21a2 2 0 1 1 0 4h-.09A1.7 1.7 0 0 0 19.4 15Z" />
+            </svg>
           </button>
         </div>
       </header>
@@ -558,8 +579,10 @@ export function PopupView(props: {
             <SettingsPanel
               settings={settings()}
               themeMode={props.themeMode}
+              backgroundOpacity={backgroundOpacity()}
               onSave={props.onSaveSettings}
               onToggleTheme={props.onToggleTheme}
+              onSetBackgroundOpacity={setBackgroundOpacity}
             />
           </div>
         )}
@@ -580,8 +603,10 @@ function EmptyState(props: { shortcut: string }) {
 function SettingsPanel(props: {
   settings: ProviderSettings;
   themeMode: ThemeMode;
+  backgroundOpacity: number;
   onSave: (update: ProviderSettingsUpdate) => Promise<void>;
   onToggleTheme: () => void;
+  onSetBackgroundOpacity: (opacity: number) => void;
 }) {
   const [provider, setProvider] = createSignal<ProviderKind>(
     props.settings.provider,
@@ -714,6 +739,25 @@ function SettingsPanel(props: {
             {props.themeMode === "dark" ? "Light" : "Dark"}
           </button>
         </div>
+
+        <label>
+          <span>Background opacity</span>
+          <div class="range-field">
+            <input
+              type="range"
+              min="0"
+              max="1"
+              step="0.05"
+              value={props.backgroundOpacity}
+              onInput={(event) =>
+                props.onSetBackgroundOpacity(
+                  Number(event.currentTarget.value),
+                )
+              }
+            />
+            <output>{Math.round(props.backgroundOpacity * 100)}%</output>
+          </div>
+        </label>
 
         <label>
           <span>Provider</span>
@@ -1011,9 +1055,10 @@ function highlightSegments(
   const lowerNeedle = needle.toLocaleLowerCase();
   const segments: Array<{ text: string; highlighted: boolean }> = [];
   let cursor = 0;
+  let searchFrom = 0;
 
-  while (cursor < sentence.length) {
-    const index = lowerSentence.indexOf(lowerNeedle, cursor);
+  while (searchFrom < sentence.length) {
+    const index = lowerSentence.indexOf(lowerNeedle, searchFrom);
     if (index < 0) {
       segments.push({ text: sentence.slice(cursor), highlighted: false });
       break;
@@ -1021,7 +1066,7 @@ function highlightSegments(
 
     const end = index + needle.length;
     if (!isTargetBoundary(sentence, index, end, needle)) {
-      cursor = index + 1;
+      searchFrom = index + 1;
       continue;
     }
 
@@ -1030,6 +1075,7 @@ function highlightSegments(
     }
     segments.push({ text: sentence.slice(index, end), highlighted: true });
     cursor = end;
+    searchFrom = end;
   }
 
   return segments.length > 0
@@ -1079,6 +1125,9 @@ function RelatedWordItem(props: {
   };
 }) {
   const [open, setOpen] = createSignal(false);
+  let detailShell: HTMLDivElement | undefined;
+  const detailMaxHeight = () =>
+    open() && detailShell ? `${detailShell.scrollHeight}px` : "0px";
 
   return (
     <article class="synonym-row" classList={{ expanded: open() }}>
@@ -1093,7 +1142,14 @@ function RelatedWordItem(props: {
           <span class="synonym-ja">{props.word.japanese}</span>
         </span>
       </button>
-      <div class="synonym-detail-shell" aria-hidden={!open()}>
+      <div
+        class="synonym-detail-shell"
+        aria-hidden={!open()}
+        ref={(element) => {
+          detailShell = element;
+        }}
+        style={{ "max-height": detailMaxHeight() }}
+      >
         <p>{props.word.usageComparison}</p>
       </div>
     </article>
