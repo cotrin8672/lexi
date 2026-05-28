@@ -1150,7 +1150,9 @@ function RelatedWordItem(props: {
         }}
         style={{ "max-height": detailMaxHeight() }}
       >
-        <p>{props.word.usageComparison}</p>
+        <div class="synonym-detail-content">
+          <p>{props.word.usageComparison}</p>
+        </div>
       </div>
     </article>
   );

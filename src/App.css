@@ -339,8 +339,12 @@ button {
   transform: translateY(0);
 }
 
+.synonym-detail-content {
+  padding: 0 0 14px;
+}
+
 .synonym-detail-shell p {
-  margin: 0 0 12px;
+  margin: 0;
   color: var(--muted);
   font-size: 0.9rem;
   line-height: 1.65;
