@@ -1,4 +1,4 @@
-use crate::{errors::AppError, secrets};
+use crate::{errors::AppError, secrets, shortcut};
 use serde::{Deserialize, Serialize};
 use std::{fs, path::PathBuf, sync::Mutex};
 use tauri::{AppHandle, Manager};
@@ -32,6 +32,10 @@ impl ProviderKind {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ProviderSettings {
+    #[serde(default = "default_shortcut_setting")]
+    pub shortcut: String,
+    #[serde(default = "default_background_opacity")]
+    pub background_opacity: f64,
     pub provider: ProviderKind,
     pub model: String,
     pub result_language: String,
@@ -41,6 +45,8 @@ pub struct ProviderSettings {
 impl Default for ProviderSettings {
     fn default() -> Self {
         Self {
+            shortcut: shortcut::DEFAULT_SHORTCUT_LABEL.to_string(),
+            background_opacity: default_background_opacity(),
             provider: ProviderKind::Gemini,
             model: ProviderKind::Gemini.default_model().to_string(),
             result_language: "ja".to_string(),
@@ -52,6 +58,8 @@ impl Default for ProviderSettings {
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ProviderSettingsView {
+    pub shortcut: String,
+    pub background_opacity: f64,
     pub provider: ProviderKind,
     pub model: String,
     pub result_language: String,
@@ -62,6 +70,8 @@ pub struct ProviderSettingsView {
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ProviderSettingsUpdate {
+    pub shortcut: String,
+    pub background_opacity: f64,
     pub provider: ProviderKind,
     pub model: String,
     pub result_language: String,
@@ -126,7 +136,12 @@ impl SettingsState {
             ));
         }
 
+        let normalized_shortcut = shortcut::normalize_shortcut_label(&update.shortcut)?;
+        let background_opacity = validate_background_opacity(update.background_opacity)?;
+
         let settings = ProviderSettings {
+            shortcut: normalized_shortcut,
+            background_opacity,
             provider: update.provider,
             model: model.to_string(),
             result_language: result_language.to_string(),
@@ -139,6 +154,12 @@ impl SettingsState {
                 secrets::write_api_key(update.provider, trimmed)?;
             }
         }
+
+        let registered_shortcut = shortcut::update_registered_shortcut(app, &settings.shortcut)?;
+        let settings = ProviderSettings {
+            shortcut: registered_shortcut,
+            ..settings
+        };
 
         write_settings(app, &settings)?;
         *self.settings.lock().expect("settings state poisoned") = Some(settings.clone());
@@ -175,6 +196,8 @@ pub fn update_provider_settings(
 fn settings_view(app: &AppHandle, settings: ProviderSettings) -> ProviderSettingsView {
     let api_key_configured = has_api_key(app, settings.provider);
     ProviderSettingsView {
+        shortcut: settings.shortcut,
+        background_opacity: settings.background_opacity,
         provider: settings.provider,
         model: settings.model,
         result_language: settings.result_language,
@@ -238,4 +261,25 @@ fn ensure_parent(path: &PathBuf) -> Result<(), AppError> {
     }
 
     Ok(())
+}
+
+fn default_shortcut_setting() -> String {
+    shortcut::DEFAULT_SHORTCUT_LABEL.to_string()
+}
+
+fn default_background_opacity() -> f64 {
+    0.94
+}
+
+fn validate_background_opacity(value: f64) -> Result<f64, AppError> {
+    if !value.is_finite() || !(0.0..=1.0).contains(&value) {
+        return Err(AppError::new(
+            crate::errors::AppErrorCode::ProviderNotConfigured,
+            "Background opacity is invalid.",
+            format!("background opacity must be between 0 and 1: {value}"),
+            false,
+        ));
+    }
+
+    Ok((value * 100.0).round() / 100.0)
 }

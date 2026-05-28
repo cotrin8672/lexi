@@ -88,6 +88,14 @@ function readyState(result = mockResult()): PopupState {
   };
 }
 
+function readyCapture() {
+  const state = readyState();
+  if (state.kind !== "ready") {
+    throw new Error("readyState helper returned non-ready state");
+  }
+  return state.capture;
+}
+
 function mockResult(): LexiResultV1 {
   return {
     schemaVersion: LEXI_RESULT_V1_SCHEMA_VERSION,
@@ -267,7 +275,7 @@ describe("PopupView", () => {
       shortcut: "Ctrl+Shift+X",
       requestId: 7,
       phase: "streaming",
-      capture: readyState().capture,
+      capture: readyCapture(),
       partial: {
         headword: "subtle",
         translations: mockResult().translations,
@@ -310,7 +318,7 @@ describe("PopupView", () => {
       shortcut: "Ctrl+Shift+X",
       requestId: 7,
       phase: "streaming",
-      capture: readyState().capture,
+      capture: readyCapture(),
       partial: {
         headword: "subtle",
         translations: [],
@@ -420,6 +428,8 @@ describe("PopupView", () => {
           state={readyState()}
           settingsOpen
           providerSettings={{
+            shortcut: "Ctrl+Shift+X",
+            backgroundOpacity: 0.3,
             provider: "gemini",
             model: "gemini-2.5-flash-lite",
             resultLanguage: "ja",
@@ -442,6 +452,7 @@ describe("PopupView", () => {
     );
 
     expect(root.textContent).toContain("Provider");
+    expect(root.textContent).toContain("Shortcut");
     expect(root.textContent).toContain("Theme");
     expect(root.textContent).toContain("Background opacity");
     expect(root.textContent).toContain("30%");
@@ -475,6 +486,151 @@ describe("PopupView", () => {
     opacityInput.value = "0.45";
     opacityInput.dispatchEvent(new Event("input", { bubbles: true }));
     expect(onSetBackgroundOpacity).toHaveBeenCalledWith(0.45);
+    const shortcutButton = root.querySelector(".shortcut-recorder");
+    expect(shortcutButton).toBeInstanceOf(HTMLButtonElement);
+    expect(shortcutButton!.textContent).toBe("Ctrl+Shift+X");
+
+    root.remove();
+  });
+
+  it("records shortcut changes from a key chord", async () => {
+    vi.mocked(invoke).mockResolvedValueOnce({
+      provider: "gemini",
+      models: [{ id: "gemini-2.5-flash-lite", label: "Gemini 2.5 Flash-Lite" }],
+      fetched: true,
+      warning: null,
+    });
+    const onSaveSettings = vi.fn(async () => undefined);
+    const root = document.createElement("div");
+    document.body.appendChild(root);
+
+    render(
+      () => (
+        <PopupView
+          state={readyState()}
+          settingsOpen
+          providerSettings={{
+            shortcut: "Ctrl+Shift+X",
+            backgroundOpacity: 0.94,
+            provider: "gemini",
+            model: "gemini-2.5-flash-lite",
+            resultLanguage: "ja",
+            promptMode: "word-study",
+            apiKeyConfigured: true,
+          }}
+          activeResultTab="meaning"
+          themeMode="light"
+          onClose={noop}
+          onRetry={noop}
+          onToggleSettings={noop}
+          onToggleTheme={noop}
+          onSaveSettings={onSaveSettings}
+          onSetResultTab={noop}
+        />
+      ),
+      root,
+    );
+
+    const shortcutButton = root.querySelector(".shortcut-recorder");
+    expect(shortcutButton).toBeInstanceOf(HTMLButtonElement);
+    shortcutButton!.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    shortcutButton!.dispatchEvent(
+      new KeyboardEvent("keydown", {
+        key: "Control",
+        ctrlKey: true,
+        bubbles: true,
+      }),
+    );
+    expect(shortcutButton!.textContent).toBe("Ctrl+...");
+    shortcutButton!.dispatchEvent(
+      new KeyboardEvent("keydown", {
+        key: "(",
+        ctrlKey: true,
+        shiftKey: true,
+        bubbles: true,
+      }),
+    );
+    expect(shortcutButton!.textContent).toBe("Ctrl+Shift+(");
+    root
+      .querySelector("form")
+      ?.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true }));
+    await Promise.resolve();
+
+    expect(onSaveSettings).toHaveBeenCalledWith({
+      shortcut: "Ctrl+Shift+(",
+      backgroundOpacity: 0.94,
+      provider: "gemini",
+      model: "gemini-2.5-flash-lite",
+      resultLanguage: "ja",
+      promptMode: "word-study",
+      apiKey: null,
+    });
+
+    root.remove();
+  });
+
+  it("saves background opacity with provider settings", async () => {
+    vi.mocked(invoke).mockResolvedValueOnce({
+      provider: "gemini",
+      models: [{ id: "gemini-2.5-flash-lite", label: "Gemini 2.5 Flash-Lite" }],
+      fetched: true,
+      warning: null,
+    });
+    const [backgroundOpacity, setBackgroundOpacity] = createSignal(0.94);
+    const onSaveSettings = vi.fn(async () => undefined);
+    const root = document.createElement("div");
+    document.body.appendChild(root);
+
+    render(
+      () => (
+        <PopupView
+          state={readyState()}
+          settingsOpen
+          providerSettings={{
+            shortcut: "Ctrl+Shift+X",
+            backgroundOpacity: 0.94,
+            provider: "gemini",
+            model: "gemini-2.5-flash-lite",
+            resultLanguage: "ja",
+            promptMode: "word-study",
+            apiKeyConfigured: true,
+          }}
+          activeResultTab="meaning"
+          themeMode="light"
+          backgroundOpacity={backgroundOpacity()}
+          onClose={noop}
+          onRetry={noop}
+          onToggleSettings={noop}
+          onToggleTheme={noop}
+          onSetBackgroundOpacity={setBackgroundOpacity}
+          onSaveSettings={onSaveSettings}
+          onSetResultTab={noop}
+        />
+      ),
+      root,
+    );
+
+    const opacityInput = root.querySelector(
+      'input[type="range"]',
+    ) as HTMLInputElement;
+    opacityInput.value = "0.6";
+    opacityInput.dispatchEvent(new Event("input", { bubbles: true }));
+    await Promise.resolve();
+
+    root
+      .querySelector("form")
+      ?.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true }));
+    await Promise.resolve();
+
+    expect(onSaveSettings).toHaveBeenCalledWith({
+      shortcut: "Ctrl+Shift+X",
+      backgroundOpacity: 0.6,
+      provider: "gemini",
+      model: "gemini-2.5-flash-lite",
+      resultLanguage: "ja",
+      promptMode: "word-study",
+      apiKey: null,
+    });
 
     root.remove();
   });
@@ -499,6 +655,8 @@ describe("PopupView", () => {
           state={readyState()}
           settingsOpen
           providerSettings={{
+            shortcut: "Ctrl+Shift+X",
+            backgroundOpacity: 0.94,
             provider: "gemini",
             model: "gemini-2.5-flash-lite",
             resultLanguage: "ja",
@@ -538,6 +696,8 @@ describe("PopupView", () => {
     await Promise.resolve();
 
     expect(onSaveSettings).toHaveBeenCalledWith({
+      shortcut: "Ctrl+Shift+X",
+      backgroundOpacity: 0.94,
       provider: "gemini",
       model: "gemini-2.5-flash",
       resultLanguage: "ja",
@@ -583,6 +743,8 @@ describe("App stream flow", () => {
     vi.mocked(invoke).mockImplementation((command) => {
       if (command === "get_provider_settings") {
         return Promise.resolve({
+          shortcut: "Ctrl+Shift+X",
+          backgroundOpacity: 0.72,
           provider: "gemini",
           model: "gemini-2.5-flash-lite",
           resultLanguage: "ja",

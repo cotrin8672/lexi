@@ -39,10 +39,11 @@ Out of scope for the first release:
 - While selection capture or structured response fields are pending, the popup should reserve the final result layout with skeleton placeholders and fade each field in as soon as that field is available.
 - The app validates the response against the expected schema before rendering it.
 - The default low-cost provider is Gemini, with OpenAI available as the fallback provider when Gemini responses are not stable enough.
-- The user can change provider, model, result language, and API key from the popup settings panel.
-- The user can adjust the popup backdrop opacity from the popup settings panel.
+- The user can change shortcut, provider, model, result language, and API key from the popup settings panel.
+- The user can adjust and persist the popup backdrop opacity from the popup settings panel.
 - Model settings are selected from a provider model-list endpoint when an API key is configured, with a small default fallback list when model-list retrieval is unavailable.
 - Result language settings are selected from an embedded dropdown list instead of a free-form text field.
+- Shortcut settings are recorded from an actual key chord, normalized as a `+`-separated accelerator such as `Ctrl+Shift+X`, and re-registered without restarting the app.
 - The user can open settings from a gear button in the popup header.
 - Result UI actions such as copy and retry are not shown in the bottom action bar.
 - The app shows actionable errors for unsupported selection source, empty selection, shortcut registration failure, provider failure, and schema validation failure.
@@ -79,7 +80,7 @@ Out of scope for the first release:
 - The desktop popup window should support a transparent webview background, with the page backdrop rendered as a subtle translucent layer rather than an opaque full-window fill.
 - Pending capture and result areas should use skeleton placeholders instead of repeated loading text, so the result layout remains stable while streaming fields arrive.
 - Settings opens from a header gear button, not a bottom action bar.
-- Settings includes a compact backdrop opacity control that updates the translucent popup background immediately.
+- Settings includes a compact persisted backdrop opacity control that updates the translucent popup background immediately.
 - The current result view should not reserve a bottom action row for copy/retry/settings.
 - Avoid persistent instructional text in the main popup.
 - Use compact controls and clear state changes rather than decorative panels.

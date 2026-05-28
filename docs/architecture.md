@@ -60,6 +60,7 @@ Prefer a small command surface:
 - `list_provider_models(provider: ProviderKind) -> ProviderModelsResult`
 - `get_provider_settings() -> ProviderSettingsView`
 - `update_provider_settings(input: ProviderSettingsUpdate) -> ProviderSettingsView`
+  - Includes the configurable shortcut, persisted background opacity, provider, model, result language, prompt mode, and optional API key update.
 - `copy_result(input: CopyRequest) -> CopyResult`
 
 Do not expose broad filesystem, shell, HTTP, or clipboard permissions directly to frontend code unless a specific feature requires them and the capability file is updated deliberately.
@@ -73,7 +74,7 @@ Temporary PoC command:
 Phase 3 shortcut shell command:
 
 - `get_shortcut_status() -> ShortcutStatus`
-- Returns the configured default shortcut and any startup registration error.
+- Returns the configured shortcut and any startup registration error.
 - Does not register shortcuts from the frontend; registration is backend-owned.
 
 Phase 3 frontend event:
@@ -99,7 +100,8 @@ Phase 4 popup state:
 - The word-study result renders as a single dictionary-card surface modeled after the editorial preview: a headword header, a nuance callout, translation rows with part-of-speech marks and examples, and similar-word rows with expandable usage comparisons.
 - Result actions are copy, retry, close, and settings. Copy writes only the structured mock result text, not captured source text.
 - Phase 5 removes the bottom result action bar. Settings opens from a header gear button and exposes provider, provider-backed model dropdown, embedded result-language dropdown, and API key update fields.
-- The settings panel also exposes a frontend-owned background opacity slider. It updates a CSS custom property on the popup shell for background fills, borders, and shadows without reducing text or icon opacity, and does not cross the Tauri command boundary.
+- The settings panel also exposes a shortcut recorder. Saving settings sends the recorded key chord through the Rust command boundary; the backend validates, normalizes, persists, and re-registers the shortcut immediately. If registration fails, the previous registered shortcut is restored and the frontend receives a `ShortcutRegistrationFailed` error.
+- The settings panel also exposes a persisted background opacity slider. It updates a CSS custom property on the popup shell for background fills, borders, and shadows without reducing text or icon opacity, and saves through the Rust-owned settings file.
 - The popup window opens at a 500 by 620 default size with 360 by 360 minimum constraints and remains resizable. The frontend shell uses responsive constraints and pane-level scrolling so long result text does not clip at narrow widths.
 - The Tauri window enables `transparent`, and the frontend keeps `html`, `body`, `#root`, and the full-window shell free of opaque fills so the popup backdrop can be translucent on supported desktops.
 - During capturing, requesting, and streaming states, the dictionary-card body keeps the final layout visible with skeleton placeholders. Completed nuance, translation, and similar-word fields are inserted into their final positions with a short fade-in animation.

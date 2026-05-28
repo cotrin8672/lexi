@@ -9,17 +9,15 @@ use std::sync::{mpsc, Mutex, OnceLock};
 use std::thread;
 use std::time::{Duration, Instant};
 use windows::core::{Interface, BSTR, VARIANT};
-use windows::Win32::Foundation::{CloseHandle, HANDLE, HGLOBAL, HWND, MAX_PATH};
-use windows::Win32::System::Com::{
-    CoCreateInstance, CoInitializeEx, CoUninitialize, CLSCTX_INPROC_SERVER,
-    COINIT_APARTMENTTHREADED,
-};
+use windows::Win32::Foundation::{CloseHandle, HGLOBAL, HWND, MAX_PATH};
+use windows::Win32::System::Com::{CoCreateInstance, IDataObject, CLSCTX_INPROC_SERVER};
 use windows::Win32::System::DataExchange::{
-    CloseClipboard, EmptyClipboard, EnumClipboardFormats, GetClipboardData,
-    GetClipboardSequenceNumber, IsClipboardFormatAvailable, OpenClipboard, SetClipboardData,
+    CloseClipboard, EmptyClipboard, GetClipboardData, GetClipboardSequenceNumber,
+    IsClipboardFormatAvailable, OpenClipboard,
 };
-use windows::Win32::System::Memory::{
-    GlobalAlloc, GlobalLock, GlobalSize, GlobalUnlock, GMEM_MOVEABLE,
+use windows::Win32::System::Memory::{GlobalLock, GlobalSize, GlobalUnlock};
+use windows::Win32::System::Ole::{
+    OleGetClipboard, OleInitialize, OleSetClipboard, OleUninitialize,
 };
 use windows::Win32::System::ProcessStatus::K32GetModuleBaseNameW;
 use windows::Win32::System::Threading::{
@@ -32,15 +30,15 @@ use windows::Win32::UI::Accessibility::{
 };
 use windows::Win32::UI::Input::KeyboardAndMouse::{
     GetAsyncKeyState, SendInput, INPUT, INPUT_0, INPUT_KEYBOARD, KEYBDINPUT, KEYEVENTF_KEYUP,
-    VIRTUAL_KEY, VK_C, VK_CONTROL, VK_SHIFT,
+    VIRTUAL_KEY, VK_C, VK_CONTROL, VK_LWIN, VK_MENU, VK_RWIN, VK_SHIFT,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
     GetForegroundWindow, GetWindowTextLengthW, GetWindowTextW, GetWindowThreadProcessId,
 };
 
 const CLIPBOARD_COPY_TIMEOUT: Duration = Duration::from_millis(250);
+const CLIPBOARD_RESTORE_TIMEOUT: Duration = Duration::from_millis(300);
 const CF_UNICODETEXT_FORMAT: u32 = 13;
-const MODIFIER_RELEASE_TIMEOUT: Duration = Duration::from_millis(160);
 const POLL_INTERVAL: Duration = Duration::from_millis(10);
 
 struct ComApartment;
@@ -48,9 +46,7 @@ struct ComApartment;
 impl ComApartment {
     fn init() -> Result<Self, SelectionCaptureError> {
         unsafe {
-            CoInitializeEx(None, COINIT_APARTMENTTHREADED)
-                .ok()
-                .map_err(map_windows_error)?;
+            OleInitialize(None).map_err(map_windows_error)?;
         }
         Ok(Self)
     }
@@ -59,23 +55,29 @@ impl ComApartment {
 impl Drop for ComApartment {
     fn drop(&mut self) {
         unsafe {
-            CoUninitialize();
+            OleUninitialize();
         }
     }
 }
 
 pub fn capture_selected_text() -> Result<CapturedSelection, SelectionCaptureError> {
-    capture_selected_text_with_context()
+    capture_selected_text_with_context(None)
         .map(|result| result.selection)
         .map_err(|failure| failure.error)
 }
 
 pub fn capture_selected_text_with_failure() -> Result<CapturedSelection, SelectionCaptureFailure> {
-    capture_selected_text_with_context().map(|result| result.selection)
+    capture_selected_text_with_context(None).map(|result| result.selection)
+}
+
+pub fn capture_selected_text_with_clipboard_owner(
+    clipboard_owner: isize,
+) -> Result<CapturedSelection, SelectionCaptureFailure> {
+    capture_selected_text_with_context(Some(clipboard_owner)).map(|result| result.selection)
 }
 
 pub fn capture_selection_diagnostics() -> SelectionDiagnostics {
-    match capture_selected_text_with_context() {
+    match capture_selected_text_with_context(None) {
         Ok(result) => {
             let character_count = result.selection.text.chars().count();
             SelectionDiagnostics {
@@ -108,6 +110,7 @@ type CaptureResult = Result<CaptureSuccess, SelectionCaptureFailure>;
 
 struct CaptureSource {
     foreground_window: HWND,
+    clipboard_owner: Option<HWND>,
     source_process: Option<String>,
     source_window_title: Option<String>,
 }
@@ -135,6 +138,7 @@ impl From<SelectionCaptureError> for BackendCaptureError {
 }
 
 struct CaptureRequest {
+    clipboard_owner: Option<isize>,
     respond_to: mpsc::Sender<CaptureResult>,
 }
 
@@ -193,8 +197,8 @@ impl CaptureBackend for ClipboardBackend {
         "clipboard-copy"
     }
 
-    fn capture(&mut self, _source: &CaptureSource) -> Result<BackendCapture, BackendCaptureError> {
-        let text = capture_text_by_clipboard_copy()?;
+    fn capture(&mut self, source: &CaptureSource) -> Result<BackendCapture, BackendCaptureError> {
+        let text = capture_text_by_clipboard_copy(source.clipboard_owner)?;
         Ok(BackendCapture {
             capture_method: self.name(),
             text,
@@ -245,13 +249,16 @@ fn selection_strategies() -> [Box<dyn SelectionStrategy>; 2] {
     ]
 }
 
-fn capture_selected_text_with_context() -> CaptureResult {
-    request_worker_capture()
+fn capture_selected_text_with_context(clipboard_owner: Option<isize>) -> CaptureResult {
+    request_worker_capture(clipboard_owner)
 }
 
-fn request_worker_capture() -> CaptureResult {
+fn request_worker_capture(clipboard_owner: Option<isize>) -> CaptureResult {
     let (respond_to, response) = mpsc::channel();
-    let mut request = CaptureRequest { respond_to };
+    let mut request = CaptureRequest {
+        clipboard_owner,
+        respond_to,
+    };
 
     for attempt in 0..2 {
         let requests = selection_worker_sender();
@@ -336,7 +343,10 @@ fn run_selection_worker(receiver: mpsc::Receiver<CaptureRequest>) {
     for request in receiver {
         let _ = request
             .respond_to
-            .send(capture_selected_text_with_context_on_worker(&mut backends));
+            .send(capture_selected_text_with_context_on_worker(
+                &mut backends,
+                request.clipboard_owner,
+            ));
     }
 }
 
@@ -360,15 +370,19 @@ fn worker_failure(error: SelectionCaptureError) -> SelectionCaptureFailure {
 
 fn capture_selected_text_with_context_on_worker(
     backends: &mut [Box<dyn CaptureBackend>],
+    clipboard_owner: Option<isize>,
 ) -> CaptureResult {
-    let source = capture_source()?;
+    let source = capture_source(clipboard_owner)?;
     run_capture_backends(backends, &source)
 }
 
-fn capture_source() -> Result<CaptureSource, SelectionCaptureFailure> {
+fn capture_source(
+    clipboard_owner: Option<isize>,
+) -> Result<CaptureSource, SelectionCaptureFailure> {
     let foreground_window = foreground_window()?;
     Ok(CaptureSource {
         foreground_window,
+        clipboard_owner: clipboard_owner.map(|hwnd| HWND(hwnd as *mut _)),
         source_process: process_name(foreground_window),
         source_window_title: window_title(foreground_window),
     })
@@ -468,9 +482,9 @@ fn run_uia_selection_strategies(
 struct ClipboardGuard;
 
 impl ClipboardGuard {
-    fn open() -> Result<Self, SelectionCaptureError> {
+    fn open(owner: Option<HWND>) -> Result<Self, SelectionCaptureError> {
         unsafe {
-            OpenClipboard(HWND::default()).map_err(map_windows_error)?;
+            OpenClipboard(owner.unwrap_or_default()).map_err(map_windows_error)?;
         }
         Ok(Self)
     }
@@ -485,68 +499,58 @@ impl Drop for ClipboardGuard {
 }
 
 struct ClipboardBackup {
-    formats: Vec<ClipboardFormatBackup>,
-}
-
-struct ClipboardFormatBackup {
-    format: u32,
-    data: Vec<u8>,
+    data_object: Option<IDataObject>,
 }
 
 impl ClipboardBackup {
-    fn capture_open_clipboard() -> Result<Self, SelectionCaptureError> {
-        let mut formats = Vec::new();
-        let mut format = 0;
-
-        loop {
-            format = unsafe { EnumClipboardFormats(format) };
-            if format == 0 {
-                break;
-            }
-
-            let handle = unsafe { GetClipboardData(format).map_err(map_windows_error)? };
-            let hglobal = HGLOBAL(handle.0);
-            let size = unsafe { GlobalSize(hglobal) };
-            if size == 0 {
-                return Err(SelectionCaptureError::WindowsApiFailure(format!(
-                    "clipboard format {format} is not memory-backed"
-                )));
-            }
-
-            let data = copy_global_memory(hglobal, size)?;
-            formats.push(ClipboardFormatBackup { format, data });
+    fn capture() -> Self {
+        Self {
+            data_object: unsafe { OleGetClipboard().ok() },
         }
-
-        Ok(Self { formats })
     }
 
-    fn restore(&self) -> Result<(), SelectionCaptureError> {
-        let _clipboard = ClipboardGuard::open()?;
-        unsafe {
-            EmptyClipboard().map_err(map_windows_error)?;
+    fn restore(&self, owner: Option<HWND>) -> Result<(), SelectionCaptureError> {
+        if let Some(data_object) = &self.data_object {
+            return retry_until(CLIPBOARD_RESTORE_TIMEOUT, || unsafe {
+                OleSetClipboard(data_object).map_err(map_windows_error)
+            });
         }
 
-        for format in &self.formats {
-            let hglobal = global_memory_from_bytes(&format.data)?;
-            unsafe {
-                SetClipboardData(format.format, HANDLE(hglobal.0)).map_err(map_windows_error)?;
-            }
-        }
-
-        Ok(())
+        retry_until(CLIPBOARD_RESTORE_TIMEOUT, || {
+            let _clipboard = ClipboardGuard::open(owner)?;
+            unsafe { EmptyClipboard().map_err(map_windows_error) }
+        })
     }
 }
 
-fn capture_text_by_clipboard_copy() -> Result<String, BackendCaptureError> {
-    wait_for_copy_modifiers_released()?;
-    let backup = {
-        let _clipboard = ClipboardGuard::open()?;
-        let backup = ClipboardBackup::capture_open_clipboard()?;
+fn retry_until<T>(
+    timeout: Duration,
+    mut operation: impl FnMut() -> Result<T, SelectionCaptureError>,
+) -> Result<T, SelectionCaptureError> {
+    let deadline = Instant::now() + timeout;
+    let mut last_error: SelectionCaptureError;
+
+    loop {
+        match operation() {
+            Ok(value) => return Ok(value),
+            Err(error) => last_error = error,
+        }
+
+        if Instant::now() >= deadline {
+            return Err(last_error);
+        }
+        thread::sleep(POLL_INTERVAL);
+    }
+}
+
+fn capture_text_by_clipboard_copy(owner: Option<HWND>) -> Result<String, BackendCaptureError> {
+    let backup = ClipboardBackup::capture();
+    {
+        let _clipboard = ClipboardGuard::open(owner)?;
         unsafe {
             EmptyClipboard().map_err(map_windows_error)?;
         }
-        backup
-    };
+    }
 
     let capture_result = (|| {
         let start_sequence = unsafe { GetClipboardSequenceNumber() };
@@ -554,7 +558,7 @@ fn capture_text_by_clipboard_copy() -> Result<String, BackendCaptureError> {
         wait_for_clipboard_text(start_sequence, CLIPBOARD_COPY_TIMEOUT)
     })();
 
-    let restore_result = backup.restore();
+    let restore_result = backup.restore(owner);
     match (capture_result, restore_result) {
         (Ok(text), Ok(())) => Ok(text),
         (Err(error), Ok(())) => Err(BackendCaptureError::Recoverable(error)),
@@ -562,31 +566,19 @@ fn capture_text_by_clipboard_copy() -> Result<String, BackendCaptureError> {
     }
 }
 
-fn wait_for_copy_modifiers_released() -> Result<(), SelectionCaptureError> {
-    let deadline = Instant::now() + MODIFIER_RELEASE_TIMEOUT;
-    while Instant::now() < deadline {
-        if !key_is_down(VK_CONTROL) && !key_is_down(VK_SHIFT) {
-            return Ok(());
-        }
-        thread::sleep(POLL_INTERVAL);
-    }
-
-    Err(SelectionCaptureError::WindowsApiFailure(
-        "copy shortcut modifiers were still pressed".to_string(),
-    ))
-}
-
 fn key_is_down(key: VIRTUAL_KEY) -> bool {
     unsafe { GetAsyncKeyState(key.0 as i32) < 0 }
 }
 
 fn send_ctrl_c() -> Result<(), SelectionCaptureError> {
-    let inputs = [
+    let mut inputs = Vec::new();
+    release_interfering_copy_modifiers(&mut inputs);
+    inputs.extend([
         keyboard_input(VK_CONTROL, false),
         keyboard_input(VK_C, false),
         keyboard_input(VK_C, true),
         keyboard_input(VK_CONTROL, true),
-    ];
+    ]);
     let sent = unsafe { SendInput(&inputs, size_of::<INPUT>() as i32) };
     if sent == inputs.len() as u32 {
         Ok(())
@@ -595,6 +587,14 @@ fn send_ctrl_c() -> Result<(), SelectionCaptureError> {
             "SendInput sent {sent} of {} keyboard events",
             inputs.len()
         )))
+    }
+}
+
+fn release_interfering_copy_modifiers(inputs: &mut Vec<INPUT>) {
+    for key in [VK_SHIFT, VK_MENU, VK_LWIN, VK_RWIN] {
+        if key_is_down(key) {
+            inputs.push(keyboard_input(key, true));
+        }
     }
 }
 
@@ -639,7 +639,7 @@ fn wait_for_clipboard_text(
 }
 
 fn read_clipboard_unicode_text() -> Result<String, SelectionCaptureError> {
-    let _clipboard = ClipboardGuard::open()?;
+    let _clipboard = ClipboardGuard::open(None)?;
     read_clipboard_unicode_text_open_clipboard()
 }
 
@@ -683,22 +683,6 @@ fn copy_global_memory(hglobal: HGLOBAL, size: usize) -> Result<Vec<u8>, Selectio
     let data = unsafe { std::slice::from_raw_parts(pointer.cast::<u8>(), size).to_vec() };
     let _ = unsafe { GlobalUnlock(hglobal) };
     Ok(data)
-}
-
-fn global_memory_from_bytes(data: &[u8]) -> Result<HGLOBAL, SelectionCaptureError> {
-    let hglobal = unsafe { GlobalAlloc(GMEM_MOVEABLE, data.len()).map_err(map_windows_error)? };
-    let pointer = unsafe { GlobalLock(hglobal) };
-    if pointer.is_null() {
-        return Err(SelectionCaptureError::WindowsApiFailure(
-            "GlobalLock failed for clipboard restore data".to_string(),
-        ));
-    }
-
-    unsafe {
-        std::ptr::copy_nonoverlapping(data.as_ptr(), pointer.cast::<u8>(), data.len());
-    }
-    let _ = unsafe { GlobalUnlock(hglobal) };
-    Ok(hglobal)
 }
 
 fn selected_text_from_element(
@@ -903,6 +887,7 @@ mod tests {
     fn test_source() -> CaptureSource {
         CaptureSource {
             foreground_window: HWND::default(),
+            clipboard_owner: None,
             source_process: Some("example.exe".to_string()),
             source_window_title: Some("Example".to_string()),
         }

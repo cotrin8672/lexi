@@ -48,6 +48,12 @@ pub fn capture_selected_text_with_failure() -> Result<CapturedSelection, Selecti
     platform::capture_selected_text_with_failure()
 }
 
+pub fn capture_selected_text_with_clipboard_owner(
+    clipboard_owner: isize,
+) -> Result<CapturedSelection, SelectionCaptureFailure> {
+    platform::capture_selected_text_with_clipboard_owner(clipboard_owner)
+}
+
 pub fn capture_selection_diagnostics() -> SelectionDiagnostics {
     platform::capture_selection_diagnostics()
 }
@@ -93,6 +99,12 @@ mod platform {
             source_process: None,
             source_window_title: None,
         })
+    }
+
+    pub fn capture_selected_text_with_clipboard_owner(
+        _clipboard_owner: isize,
+    ) -> Result<CapturedSelection, SelectionCaptureFailure> {
+        capture_selected_text_with_failure()
     }
 
     pub fn capture_selection_diagnostics() -> SelectionDiagnostics {

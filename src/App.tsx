@@ -68,6 +68,8 @@ type ThemeMode = "light" | "dark";
 type ProviderKind = "mock" | "gemini" | "open-ai";
 
 type ProviderSettings = {
+  shortcut: string;
+  backgroundOpacity: number;
   provider: ProviderKind;
   model: string;
   resultLanguage: string;
@@ -76,6 +78,8 @@ type ProviderSettings = {
 };
 
 type ProviderSettingsUpdate = {
+  shortcut: string;
+  backgroundOpacity: number;
   provider: ProviderKind;
   model: string;
   resultLanguage: string;
@@ -255,9 +259,10 @@ function App() {
     let cleanupCapture: (() => void) | undefined;
     let cleanupTransform: (() => void) | undefined;
 
-    void invoke<ProviderSettings>("get_provider_settings").then(
-      setProviderSettings,
-    );
+    void invoke<ProviderSettings>("get_provider_settings").then((settings) => {
+      setProviderSettings(settings);
+      setBackgroundOpacity(settings.backgroundOpacity);
+    });
 
     void invoke<ShortcutStatus>("get_shortcut_status").then((status) => {
       if (status.registrationError) {
@@ -468,6 +473,8 @@ function App() {
           { update },
         );
         setProviderSettings(saved);
+        setBackgroundOpacity(saved.backgroundOpacity);
+        setState((current) => ({ ...current, shortcut: saved.shortcut }));
         setSettingsOpen(false);
       }}
       onSetResultTab={setActiveResultTab}
@@ -611,6 +618,7 @@ function SettingsPanel(props: {
   const [provider, setProvider] = createSignal<ProviderKind>(
     props.settings.provider,
   );
+  const [shortcut, setShortcut] = createSignal(props.settings.shortcut);
   const [model, setModel] = createSignal(props.settings.model);
   const [resultLanguage, setResultLanguage] = createSignal(
     props.settings.resultLanguage,
@@ -624,12 +632,17 @@ function SettingsPanel(props: {
   );
   const [modelsLoading, setModelsLoading] = createSignal(false);
   const [modelsWarning, setModelsWarning] = createSignal<string | null>(null);
+  const [recordingShortcut, setRecordingShortcut] = createSignal(false);
+  const [recordingShortcutPreview, setRecordingShortcutPreview] =
+    createSignal("");
   const [saving, setSaving] = createSignal(false);
   const [error, setError] = createSignal<string | null>(null);
   let modelLoadSequence = 0;
   const hasChanges = createMemo(
     () =>
       provider() !== props.settings.provider ||
+      shortcut().trim() !== props.settings.shortcut ||
+      props.backgroundOpacity !== props.settings.backgroundOpacity ||
       model().trim() !== props.settings.model ||
       resultLanguage().trim() !== props.settings.resultLanguage ||
       apiKey().trim().length > 0,
@@ -697,6 +710,8 @@ function SettingsPanel(props: {
 
     try {
       await props.onSave({
+        shortcut: shortcut().trim(),
+        backgroundOpacity: props.backgroundOpacity,
         provider: provider(),
         model: model().trim(),
         resultLanguage: resultLanguage().trim(),
@@ -758,6 +773,59 @@ function SettingsPanel(props: {
             <output>{Math.round(props.backgroundOpacity * 100)}%</output>
           </div>
         </label>
+
+        <div class="settings-field">
+          <span>Shortcut</span>
+          <button
+            class="button shortcut-recorder"
+            type="button"
+            aria-pressed={recordingShortcut()}
+            onClick={() => {
+              setRecordingShortcut(true);
+              setRecordingShortcutPreview("");
+            }}
+            onBlur={() => {
+              setRecordingShortcut(false);
+              setRecordingShortcutPreview("");
+            }}
+            onKeyDown={(event) => {
+              if (!recordingShortcut()) {
+                return;
+              }
+
+              event.preventDefault();
+              event.stopPropagation();
+
+              if (event.key === "Escape") {
+                setRecordingShortcut(false);
+                setRecordingShortcutPreview("");
+                return;
+              }
+
+              setRecordingShortcutPreview(shortcutPreviewFromKeyboardEvent(event));
+              const nextShortcut = shortcutFromKeyboardEvent(event);
+              if (nextShortcut) {
+                setShortcut(nextShortcut);
+                setRecordingShortcut(false);
+                setRecordingShortcutPreview("");
+              }
+            }}
+            onKeyUp={(event) => {
+              if (recordingShortcut()) {
+                setRecordingShortcutPreview(shortcutPreviewFromKeyboardEvent(event));
+              }
+            }}
+          >
+            <ShortcutKeySequence
+              shortcut={
+                recordingShortcut()
+                  ? recordingShortcutPreview() || "Press shortcut"
+                  : shortcut()
+              }
+              recording={recordingShortcut()}
+            />
+          </button>
+        </div>
 
         <label>
           <span>Provider</span>
@@ -1284,6 +1352,102 @@ function ensureSelectedModel(
   }
 
   return [{ id: selectedModel, label: selectedModel }, ...models];
+}
+
+function ShortcutKeySequence(props: { shortcut: string; recording: boolean }) {
+  const parts = createMemo(() =>
+    props.shortcut
+      .split("+")
+      .map((part) => part.trim())
+      .filter((part) => part.length > 0),
+  );
+
+  return (
+    <span class="shortcut-key-sequence">
+      <For each={parts()}>
+        {(part, index) => (
+          <>
+            <Show when={index() > 0}>
+              <span class="shortcut-plus" aria-hidden="true">
+                +
+              </span>
+            </Show>
+            <span
+              class="shortcut-keycap"
+              classList={{ pending: props.recording && part === "..." }}
+            >
+              {part}
+            </span>
+          </>
+        )}
+      </For>
+    </span>
+  );
+}
+
+function shortcutFromKeyboardEvent(event: KeyboardEvent): string | null {
+  const key = shortcutKeyLabel(event);
+  if (!key) {
+    return null;
+  }
+
+  const parts = shortcutModifierLabels(event);
+  if (parts.length === 0) {
+    return null;
+  }
+
+  parts.push(key);
+  return parts.join("+");
+}
+
+function shortcutPreviewFromKeyboardEvent(event: KeyboardEvent): string {
+  const parts = shortcutModifierLabels(event);
+  const key = shortcutKeyLabel(event);
+
+  if (key) {
+    parts.push(key);
+  } else if (parts.length > 0) {
+    parts.push("...");
+  }
+
+  return parts.join("+");
+}
+
+function shortcutKeyLabel(event: KeyboardEvent): string | null {
+  const key = event.key;
+  if (key.length === 1 && /^[a-z0-9]$/i.test(key)) {
+    return key.toUpperCase();
+  }
+  if (key.length === 1 && key !== "+") {
+    return key;
+  }
+  if (key === "+") {
+    return "Plus";
+  }
+
+  if (/^F([1-9]|1[0-2])$/.test(key)) {
+    return key.toUpperCase();
+  }
+
+  return null;
+}
+
+function shortcutModifierLabels(event: KeyboardEvent): string[] {
+  const parts = [];
+  if (event.ctrlKey) {
+    parts.push("Ctrl");
+  }
+  if (event.altKey) {
+    parts.push("Alt");
+  }
+  if (event.shiftKey) {
+    parts.push("Shift");
+  }
+  if (event.metaKey) {
+    parts.push("Super");
+  }
+
+  return parts;
 }
 
 function isAppError(value: unknown): value is AppError {

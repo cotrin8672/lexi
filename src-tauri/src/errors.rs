@@ -101,7 +101,7 @@ impl From<SelectionCaptureError> for AppError {
             SelectionCaptureError::WindowsApiFailure(message) => Self::new(
                 AppErrorCode::SelectionUnavailable,
                 "Lexi could not read the selected text.",
-                format!("Windows UI Automation failure: {message}"),
+                format!("Windows selected-text capture failure: {message}"),
                 true,
             ),
         }
