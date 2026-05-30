@@ -33,6 +33,7 @@
     "sourceLanguage": "en",
     "resultLanguage": "ja",
     "headword": "subtle",
+    "inflections": [],
     "translations": [
       {
         "text": "蠕ｮ螯吶↑",
@@ -69,6 +70,13 @@
         "usageComparison": "subtle 縺ｯ豌励▼縺阪↓縺上＞諤ｧ雉ｪ蜈ｨ闊ｬ縲］uanced 縺ｯ隗｣驥医ｄ諢丞袖縺ｮ螻､縺後≠繧句ｴ蜷医↓菴ｿ縺・・
       }
     ],
+    "idioms": [
+      {
+        "idiom": "a subtle hint",
+        "japanese": "subtle hint",
+        "example": "She gave me a subtle hint."
+      }
+    ],
     "warnings": []
   },
   "streamEvents": [
@@ -83,9 +91,11 @@
       "requestId": 42,
       "partial": {
         "headword": "subtle",
+        "inflections": [],
         "translations": [],
         "nuance": null,
         "synonyms": [],
+        "idioms": [],
         "warnings": []
       }
     },
@@ -94,6 +104,7 @@
       "requestId": 42,
       "partial": {
         "headword": "subtle",
+        "inflections": [],
         "translations": [
           {
             "text": "蠕ｮ螯吶↑",
@@ -106,6 +117,7 @@
         ],
         "nuance": "蟆上＆縺冗ｹ顔ｴｰ縺ｧ縲∵ｳｨ諢上＠縺ｦ縺・↑縺・→隕玖誠縺ｨ縺励ｄ縺吶＞驕輔＞繧定｡ｨ縺吶・,
         "synonyms": [],
+        "idioms": [],
         "warnings": []
       }
     }
@@ -156,6 +168,8 @@
   },
   "displayPriorities": [
     "headword",
+    "inflections[].kind",
+    "inflections[].form",
     "translations[].text",
     "translations[].note",
     "nuance",
@@ -163,6 +177,9 @@
     "synonyms[].term",
     "synonyms[].japanese",
     "synonyms[].usageComparison",
+    "idioms[].idiom",
+    "idioms[].japanese",
+    "idioms[].example",
     "warnings"
   ],
   "fieldNotes": {

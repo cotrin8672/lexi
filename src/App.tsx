@@ -1,4 +1,4 @@
-import {
+﻿import {
   For,
   Index,
   Match,
@@ -14,8 +14,11 @@ import { listen } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import type { AppError } from "./lib/errors";
 import {
-  type LexiResultV1,
+  type Idiom,
+  type Inflection,
+  type LexiResult,
   type RelatedWord,
+  type TextTranslationResultV1,
   type Translation,
 } from "./lib/schema";
 import "./App.css";
@@ -65,7 +68,8 @@ type PopupErrorContext = {
 
 type ResultTab = "meaning" | "related";
 type ThemeMode = "light" | "dark";
-type ProviderKind = "mock" | "gemini" | "open-ai";
+type ProviderKind = "mock" | "gemini" | "open-ai" | "deep-l";
+type ResultMode = "word-study" | "text-translation";
 
 type ProviderSettings = {
   shortcut: string;
@@ -75,6 +79,7 @@ type ProviderSettings = {
   resultLanguage: string;
   promptMode: string;
   apiKeyConfigured: boolean;
+  deeplApiKeyConfigured: boolean;
 };
 
 type ProviderSettingsUpdate = {
@@ -85,21 +90,26 @@ type ProviderSettingsUpdate = {
   resultLanguage: string;
   promptMode: string;
   apiKey: string | null;
+  deeplApiKey: string | null;
 };
 
 type LexiPartialResult = {
   headword: string | null;
+  inflections: Inflection[];
   translations: Translation[];
   nuance: string | null;
   synonyms: RelatedWord[];
+  idioms: Idiom[];
   warnings: string[];
 };
 
 type ResultLike = {
   headword?: string | null;
+  inflections: Inflection[];
   translations: Translation[];
   nuance?: string | null;
   synonyms: RelatedWord[];
+  idioms: Idiom[];
   warnings: string[];
 };
 
@@ -108,6 +118,7 @@ type TransformEvent =
       status: "started";
       requestId: number;
       selectedTextPreview: string;
+      selectedText: string | null;
       shortcut: string;
       captureMethod: string;
       sourceProcess: string | null;
@@ -122,7 +133,7 @@ type TransformEvent =
   | {
       status: "ready";
       requestId: number;
-      result: LexiResultV1;
+      result: LexiResult;
       provider: ProviderKind;
       model: string;
     }
@@ -151,6 +162,7 @@ const FALLBACK_MODEL_OPTIONS: Record<ProviderKind, ProviderModel[]> = {
     { id: "gpt-5.4-mini", label: "GPT-5.4 mini" },
   ],
   mock: [{ id: "mock-word-study", label: "Mock word-study" }],
+  "deep-l": [{ id: "deepl-translate", label: "DeepL Translate" }],
 };
 
 const RESULT_LANGUAGE_OPTIONS = [
@@ -170,13 +182,15 @@ export type PopupState =
       capture: CaptureMetadata;
       requestId: number;
       partial: LexiPartialResult;
+      mode: ResultMode;
+      sourceText: string | null;
       phase: "requesting" | "streaming" | "validating";
     }
   | {
       kind: "ready";
       shortcut: string;
       capture: CaptureMetadata;
-      result: LexiResultV1;
+      result: LexiResult;
     }
   | {
       kind: "error";
@@ -350,8 +364,11 @@ function App() {
           },
           partial: {
             ...emptyPartialResult(),
-            headword: payload.selectedTextPreview,
+            headword:
+              payload.provider === "deep-l" ? "" : payload.selectedTextPreview,
           },
+          mode: payload.provider === "deep-l" ? "text-translation" : "word-study",
+          sourceText: payload.selectedText ?? null,
           phase: "requesting",
         });
         return;
@@ -379,6 +396,8 @@ function App() {
           requestId: payload.requestId,
           capture: fallbackCapture,
           partial: payload.partial,
+          mode: current.kind === "streaming" ? current.mode : "word-study",
+          sourceText: current.kind === "streaming" ? current.sourceText : null,
           phase: payload.status,
         });
         return;
@@ -509,12 +528,16 @@ export function PopupView(props: {
       <header class="lexi-header">
         <div class="title-block">
           <h1 class="headword">{headwordForState(props.state)}</h1>
+          <InflectionLine
+            headword={headwordForState(props.state)}
+            inflections={inflectionsForState(props.state)}
+          />
         </div>
         <div class="header-actions">
           <button
             class="button icon-button"
             type="button"
-            aria-label="設定"
+            aria-label="Settings"
             aria-expanded={props.settingsOpen}
             onClick={props.onToggleSettings}
           >
@@ -624,6 +647,7 @@ function SettingsPanel(props: {
     props.settings.resultLanguage,
   );
   const [apiKey, setApiKey] = createSignal("");
+  const [deeplApiKey, setDeeplApiKey] = createSignal("");
   const [models, setModels] = createSignal<ProviderModel[]>(
     ensureSelectedModel(
       FALLBACK_MODEL_OPTIONS[props.settings.provider],
@@ -645,7 +669,8 @@ function SettingsPanel(props: {
       props.backgroundOpacity !== props.settings.backgroundOpacity ||
       model().trim() !== props.settings.model ||
       resultLanguage().trim() !== props.settings.resultLanguage ||
-      apiKey().trim().length > 0,
+      apiKey().trim().length > 0 ||
+      deeplApiKey().trim().length > 0,
   );
 
   const defaultModel = (kind: ProviderKind) =>
@@ -717,6 +742,8 @@ function SettingsPanel(props: {
         resultLanguage: resultLanguage().trim(),
         promptMode: "word-study",
         apiKey: apiKey().trim().length > 0 ? apiKey().trim() : null,
+        deeplApiKey:
+          deeplApiKey().trim().length > 0 ? deeplApiKey().trim() : null,
       });
     } catch (caught) {
       setError(normalizeAppError(caught).userMessage);
@@ -730,7 +757,7 @@ function SettingsPanel(props: {
       class="settings-panel"
       role="dialog"
       aria-modal="true"
-      aria-label="設定"
+      aria-label="Settings"
       onMouseDown={(event) => event.stopPropagation()}
     >
       <form onSubmit={submit}>
@@ -828,7 +855,7 @@ function SettingsPanel(props: {
         </div>
 
         <label>
-          <span>Provider</span>
+          <span>Word provider</span>
           <select
             value={provider()}
             onChange={(event) => {
@@ -863,16 +890,45 @@ function SettingsPanel(props: {
         </label>
 
         <label>
-          <span>API key</span>
+          <span>単語用APIキー</span>
           <input
             type="password"
             value={apiKey()}
             placeholder={
               props.settings.apiKeyConfigured
                 ? "保存済み。変更時のみ入力"
-                : "API key"
+                : "APIキー"
             }
             onInput={(event) => setApiKey(event.currentTarget.value)}
+            onPaste={(event) => {
+              const pasted = event.clipboardData?.getData("text") ?? "";
+              if (pasted.length > 0) {
+                event.preventDefault();
+                setApiKey(pasted);
+              }
+            }}
+            autocomplete="off"
+          />
+        </label>
+
+        <label>
+          <span>DeepL APIキー</span>
+          <input
+            type="password"
+            value={deeplApiKey()}
+            placeholder={
+              props.settings.deeplApiKeyConfigured
+                ? "保存済み。変更時のみ入力"
+                : "DeepL APIキー"
+            }
+            onInput={(event) => setDeeplApiKey(event.currentTarget.value)}
+            onPaste={(event) => {
+              const pasted = event.clipboardData?.getData("text") ?? "";
+              if (pasted.length > 0) {
+                event.preventDefault();
+                setDeeplApiKey(pasted);
+              }
+            }}
             autocomplete="off"
           />
         </label>
@@ -890,7 +946,7 @@ function SettingsPanel(props: {
         </label>
 
         <p class="settings-note">
-          API key is never returned to the frontend after save.
+          APIキーは保存後にフロントエンドへ返しません。
         </p>
         <Show when={modelsWarning()}>
           {(message) => <p class="settings-note">{message()}</p>}
@@ -923,12 +979,42 @@ function ResultDisplayView(props: {
   void props.onSetResultTab;
 
   return (
-    <DictionaryBody
-      result={
-        props.state.kind === "ready" ? props.state.result : props.state.partial
+    <Show
+      when={
+        props.state.kind === "ready" &&
+        props.state.result.mode === "text-translation"
+          ? props.state.result
+          : null
       }
-      streaming={props.state.kind === "streaming"}
-    />
+      fallback={
+        <Show
+          when={
+            props.state.kind === "streaming" &&
+            props.state.mode === "text-translation"
+          }
+          fallback={
+            <DictionaryBody
+              result={
+                props.state.kind === "ready" && props.state.result.mode === "word-study"
+                  ? props.state.result
+                  : props.state.kind === "streaming"
+                    ? props.state.partial
+                    : emptyPartialResult()
+              }
+              streaming={props.state.kind === "streaming"}
+            />
+          }
+        >
+          <LoadingTextTranslationView
+            sourceText={
+              props.state.kind === "streaming" ? props.state.sourceText ?? "" : ""
+            }
+          />
+        </Show>
+      }
+    >
+      {(result) => <TextTranslationBody result={result()} />}
+    </Show>
   );
 }
 
@@ -1009,17 +1095,23 @@ function DictionaryBody(props: {
         </div>
       </section>
 
-      <section class="section" aria-labelledby="synonyms-title">
-        <h2 class="section-title" id="synonyms-title">
-          Similar words
-        </h2>
-        <Show
-          when={props.result.synonyms.length > 0}
-          fallback={<RelatedWordSkeletonList />}
-        >
+      <Show when={props.result.synonyms.length > 0}>
+        <section class="section" aria-labelledby="synonyms-title">
+          <h2 class="section-title" id="synonyms-title">
+            Similar words
+          </h2>
           <RelatedWordList words={props.result.synonyms} />
-        </Show>
-      </section>
+        </section>
+      </Show>
+
+      <Show when={props.result.idioms.length > 0}>
+        <section class="section" aria-labelledby="idioms-title">
+          <h2 class="section-title" id="idioms-title">
+            Idioms
+          </h2>
+          <IdiomList idioms={props.result.idioms} />
+        </section>
+      </Show>
 
       <Show when={props.result.warnings.length > 0}>
         <p class="warning-line">{props.result.warnings[0]}</p>
@@ -1040,13 +1132,61 @@ function SkeletonDictionaryBody() {
           <TranslationSkeletonList />
         </div>
       </section>
-      <section class="section" aria-labelledby="synonyms-loading-title">
-        <h2 class="section-title" id="synonyms-loading-title">
-          Similar words
-        </h2>
-        <RelatedWordSkeletonList />
-      </section>
     </>
+  );
+}
+
+function LoadingTextTranslationView(props: { sourceText: string }) {
+  return (
+    <div
+      class="text-translation-layout streaming"
+      aria-busy="true"
+      aria-label="翻訳中"
+    >
+      <textarea
+        class="translation-field translation-source-text content-reveal"
+        aria-label="原文"
+        readOnly
+        value={props.sourceText}
+      />
+      <div class="translation-arrow" aria-hidden="true">
+        ↓
+      </div>
+      <SkeletonBlock class="translation-field-skeleton translated" />
+    </div>
+  );
+}
+
+function TextTranslationBody(props: { result: TextTranslationResultV1 }) {
+  const sourceText = () => props.result.segments[0]?.source.trim() ?? "";
+
+  return (
+    <div class="text-translation-layout">
+      <Show when={sourceText().length > 0}>
+        <textarea
+          class="translation-field translation-source-text content-reveal"
+          aria-label="原文"
+          readOnly
+          value={sourceText()}
+        />
+        <div class="translation-arrow" aria-hidden="true">
+          ↓
+        </div>
+      </Show>
+      <section class="text-translation-main" aria-label="翻訳結果">
+        <textarea
+          class="translation-field translated-text content-reveal"
+          aria-label="日本語訳"
+          lang={props.result.resultLanguage}
+          readOnly
+          value={props.result.translatedText}
+        />
+      </section>
+
+      <Show when={props.result.warnings.length > 0}>
+        <p class="warning-line">{props.result.warnings[0]}</p>
+      </Show>
+    </div>
   );
 }
 
@@ -1072,20 +1212,47 @@ function TranslationSkeletonRow(props: { compact?: boolean }) {
   );
 }
 
-function RelatedWordSkeletonList() {
+function InflectionLine(props: { headword: string; inflections: Inflection[] }) {
+  const plural = createMemo(() =>
+    props.inflections.find((item) => item.kind === "plural")?.form,
+  );
+  const verbForms = createMemo(() =>
+    inflectionVerbForms(props.headword, props.inflections),
+  );
+
   return (
-    <div class="related-section" aria-hidden="true">
-      <div class="synonym-row skeleton-related-row">
-        <div class="synonym-trigger skeleton-trigger">
-          <SkeletonBlock class="line-md" />
-        </div>
-      </div>
-      <div class="synonym-row skeleton-related-row">
-        <div class="synonym-trigger skeleton-trigger">
-          <SkeletonBlock class="line-sm" />
-        </div>
-      </div>
-    </div>
+    <Show when={plural() || verbForms().length > 1}>
+      <p class="inflection-line" aria-label="Irregular inflections">
+        <Show
+          when={plural()}
+          fallback={<VerbInflectionForms forms={verbForms()} />}
+        >
+          {(form) => (
+            <span class="inflection-plural">
+              <span class="plural-icon" aria-hidden="true" />
+              <span>{form()}</span>
+            </span>
+          )}
+        </Show>
+      </p>
+    </Show>
+  );
+}
+
+function VerbInflectionForms(props: { forms: string[] }) {
+  return (
+    <span class="inflection-verb">
+      <For each={props.forms}>
+        {(form, index) => (
+          <>
+            <Show when={index() > 0}>
+              <span class="verb-flow-icon" aria-hidden="true" />
+            </Show>
+            <span>{form}</span>
+          </>
+        )}
+      </For>
+    </span>
   );
 }
 
@@ -1171,6 +1338,25 @@ function partOfSpeechMark(note: string): string {
   return first.length > 0 ? first : note;
 }
 
+function inflectionVerbForms(
+  headword: string,
+  inflections: Inflection[],
+): string[] {
+  const base = headword.trim();
+  if (base.length === 0 || inflections.length === 0) {
+    return [];
+  }
+
+  const past = inflections.find((item) => item.kind === "past")?.form;
+  const pastParticiple = inflections.find(
+    (item) => item.kind === "pastParticiple",
+  )?.form;
+
+  return [base, past, pastParticiple].filter(
+    (form): form is string => Boolean(form),
+  );
+}
+
 function RelatedWordList(props: {
   words: Array<{
     term: string;
@@ -1222,6 +1408,26 @@ function RelatedWordItem(props: {
           <p>{props.word.usageComparison}</p>
         </div>
       </div>
+    </article>
+  );
+}
+
+function IdiomList(props: { idioms: Idiom[] }) {
+  return (
+    <div class="idiom-list">
+      <For each={props.idioms}>{(idiom) => <IdiomItem idiom={idiom} />}</For>
+    </div>
+  );
+}
+
+function IdiomItem(props: { idiom: Idiom }) {
+  return (
+    <article class="idiom-row content-reveal">
+      <div class="idiom-head">
+        <span class="idiom-term">{props.idiom.idiom}</span>
+        <span class="idiom-ja">{props.idiom.japanese}</span>
+      </div>
+      <p class="idiom-example">{props.idiom.example}</p>
     </article>
   );
 }
@@ -1300,7 +1506,7 @@ function titleForState(state: PopupState): string {
     case "streaming":
       return "";
     case "ready":
-      return state.result.headword;
+      return state.result.mode === "word-study" ? state.result.headword : "";
     case "error":
       return "Error";
     case "idle":
@@ -1310,10 +1516,25 @@ function titleForState(state: PopupState): string {
 
 function headwordForState(state: PopupState): string {
   if (state.kind === "streaming") {
+    if (state.mode === "text-translation") {
+      return "";
+    }
     return state.partial.headword ?? "";
   }
 
   return titleForState(state);
+}
+
+function inflectionsForState(state: PopupState): Inflection[] {
+  if (state.kind === "streaming") {
+    return state.partial.inflections;
+  }
+
+  if (state.kind === "ready") {
+    return state.result.mode === "word-study" ? state.result.inflections : [];
+  }
+
+  return [];
 }
 
 function normalizeAppError(error: unknown): AppError {
@@ -1333,9 +1554,11 @@ function normalizeAppError(error: unknown): AppError {
 function emptyPartialResult(): LexiPartialResult {
   return {
     headword: null,
+    inflections: [],
     translations: [],
     nuance: null,
     synonyms: [],
+    idioms: [],
     warnings: [],
   };
 }
@@ -1465,3 +1688,4 @@ function isAppError(value: unknown): value is AppError {
 }
 
 export default App;
+

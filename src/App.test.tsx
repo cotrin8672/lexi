@@ -1,12 +1,15 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+﻿import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createSignal } from "solid-js";
 import { render } from "solid-js/web";
 import { invoke } from "@tauri-apps/api/core";
 import {
+  LEXI_TEXT_TRANSLATION_V1_SCHEMA_VERSION,
   LEXI_RESULT_V1_SCHEMA_VERSION,
   TRANSLATION_NOTE_VALUES,
   validateLexiResultV1,
+  type LexiResult,
   type LexiResultV1,
+  type TextTranslationResultV1,
 } from "./lib/schema";
 import App, { PopupView, type PopupState } from "./App";
 
@@ -73,7 +76,7 @@ function renderPopup(
   return root;
 }
 
-function readyState(result = mockResult()): PopupState {
+function readyState(result: LexiResult = mockResult()): PopupState {
   return {
     kind: "ready",
     shortcut: "Ctrl+Shift+X",
@@ -103,13 +106,14 @@ function mockResult(): LexiResultV1 {
     sourceLanguage: "en",
     resultLanguage: "ja",
     headword: "subtle",
+    inflections: [],
     translations: [
       {
         text: "delicate",
         note: TRANSLATION_NOTE_VALUES[2],
         example: {
           sentence: "She noticed a subtle change in his voice.",
-          japanese: "She noticed a subtle change in his voice.",
+          japanese: "She operates a small business.",
         },
       },
     ],
@@ -117,18 +121,55 @@ function mockResult(): LexiResultV1 {
     synonyms: [
       {
         term: "delicate",
-        japanese: "delicate",
+        japanese: "She operates a small business.",
         usageComparison:
           "Choose subtle for hard-to-notice differences; choose delicate for fine detail.",
       },
       {
         term: "slight",
-        japanese: "slight",
+        japanese: "She operates a small business.",
         usageComparison:
           "Choose subtle for understated meaning; choose slight for a small degree.",
       },
     ],
+    idioms: [
+      {
+        idiom: "a subtle hint",
+        japanese: "She operates a small business.",
+        example: "She gave me a subtle hint.",
+      },
+    ],
     warnings: ["Mock result."],
+  };
+}
+
+function mockTextTranslationResult(): TextTranslationResultV1 {
+  return {
+    schemaVersion: LEXI_TEXT_TRANSLATION_V1_SCHEMA_VERSION,
+    mode: "text-translation",
+    sourceLanguage: "auto",
+    detectedSourceLanguage: "EN",
+    resultLanguage: "ja",
+    translatedText: "This is a translated test.",
+    segments: [
+      {
+        source: "This is a test.",
+        translation: "This is a translated test.",
+      },
+    ],
+    warnings: [],
+  };
+}
+
+function emptyPartialResultForTest() {
+  return {
+    headword: null,
+    inflections: [],
+    translations: [],
+    nuance: null,
+    synonyms: [],
+    idioms: [],
+    warnings: [],
   };
 }
 
@@ -145,6 +186,8 @@ describe("PopupView", () => {
 
     expect(root.querySelector(".headword")?.textContent).toBe("");
     expect(root.querySelector(".skeleton-block")).toBeInstanceOf(HTMLElement);
+    expect(root.textContent).not.toContain("Similar words");
+    expect(root.textContent).not.toContain("Idioms");
     expect(root.querySelector('[aria-busy="true"]')).toBeInstanceOf(
       HTMLElement,
     );
@@ -168,6 +211,8 @@ describe("PopupView", () => {
 
     expect(root.querySelector(".headword")?.textContent).toBe("");
     expect(root.querySelector(".skeleton-block")).toBeInstanceOf(HTMLElement);
+    expect(root.textContent).not.toContain("Similar words");
+    expect(root.textContent).not.toContain("Idioms");
     const busyRegion = root.querySelector('[aria-busy="true"]');
     expect(busyRegion).toBeInstanceOf(HTMLElement);
     expect(busyRegion?.getAttribute("aria-label")).toContain("42");
@@ -179,6 +224,7 @@ describe("PopupView", () => {
 
     expect(root.textContent).toContain("subtle");
     expect(root.textContent).toContain("delicate");
+    expect(root.textContent).toContain("a subtle hint");
     expect(root.textContent).toContain("She noticed a subtle change");
     expect(root.textContent).toContain(
       "Used for something understated and easy to miss.",
@@ -190,12 +236,102 @@ describe("PopupView", () => {
     expect(root.querySelector(".error-actions")).toBeNull();
   });
 
+  it("renders text translation results with the simple translation layout", () => {
+    const root = renderPopup(readyState(mockTextTranslationResult()));
+
+    expect(root.querySelector(".headword")?.textContent).toBe("");
+    expect(
+      (root.querySelector(".translation-source-text") as HTMLTextAreaElement)
+        ?.value,
+    ).toBe(
+      "This is a test.",
+    );
+    expect(root.querySelector(".translation-arrow")?.textContent).toContain("↓");
+    expect(
+      (root.querySelector(".translated-text") as HTMLTextAreaElement)?.value,
+    ).toContain(
+      "This is a translated test.",
+    );
+    expect(root.querySelectorAll("textarea.translation-field")).toHaveLength(2);
+    expect(root.textContent).not.toContain("Source");
+    expect(root.textContent).not.toContain("Translation");
+    expect(root.textContent).not.toContain("Similar words");
+    expect(root.textContent).not.toContain("Idioms");
+  });
+
+  it("renders text translation pending state without dictionary fields", () => {
+    const root = renderPopup({
+      kind: "streaming",
+      shortcut: "Ctrl+Shift+X",
+      requestId: 7,
+      mode: "text-translation",
+      sourceText: "This is pending.",
+      phase: "requesting",
+      capture: readyCapture(),
+      partial: emptyPartialResultForTest(),
+    });
+
+    expect(root.querySelector(".headword")?.textContent).toBe("");
+    expect(root.querySelector(".text-translation-layout")).toBeInstanceOf(
+      HTMLElement,
+    );
+    expect(
+      (root.querySelector(".translation-source-text") as HTMLTextAreaElement)
+        ?.value,
+    ).toBe("This is pending.");
+    expect(root.querySelector(".translated-text")).toBeNull();
+    expect(root.querySelector(".translation-field-skeleton.translated")).toBeInstanceOf(
+      HTMLElement,
+    );
+    expect(root.textContent).not.toContain("Translations");
+    expect(root.textContent).not.toContain("Similar words");
+  });
+
+  it("renders irregular inflections under the headword", () => {
+    const result = mockResult();
+    result.headword = "go";
+    result.inflections = [
+      { kind: "past", form: "went" },
+      { kind: "pastParticiple", form: "gone" },
+    ];
+
+    const root = renderPopup(readyState(result));
+
+    expect(root.querySelector(".inflection-line")?.textContent).toBe(
+      "gowentgone",
+    );
+    expect(root.querySelectorAll(".verb-flow-icon").length).toBe(2);
+  });
+
+  it("renders irregular noun plurals without hyphenating the headword", () => {
+    const result = mockResult();
+    result.headword = "child";
+    result.inflections = [{ kind: "plural", form: "children" }];
+
+    const root = renderPopup(readyState(result));
+
+    expect(root.querySelector(".inflection-line")?.textContent).toBe("children");
+    expect(root.querySelector(".plural-icon")).toBeInstanceOf(HTMLElement);
+  });
+
+  it("hides optional sections instead of showing skeletons when ready data is empty", () => {
+    const result = mockResult();
+    result.synonyms = [];
+    result.idioms = [];
+
+    const root = renderPopup(readyState(result));
+
+    expect(root.textContent).not.toContain("Similar words");
+    expect(root.textContent).not.toContain("Idioms");
+    expect(root.querySelector(".skeleton-block")).toBeNull();
+  });
+
   it("does not clip an example when the headword is a stem inside an inflected word", () => {
     const result = mockResult();
     result.headword = "operate";
     result.translations[0].example = {
       sentence: "She operates a small business.",
-      japanese: "彼女は小さな会社を経営している。",
+      japanese: "She operates a small business.",
     };
 
     const root = renderPopup(readyState(result));
@@ -227,6 +363,8 @@ describe("PopupView", () => {
       kind: "streaming",
       shortcut: "Ctrl+Shift+X",
       requestId: 7,
+      mode: "word-study",
+      sourceText: null,
       phase: "streaming",
       capture: {
         captureMethod: "uia-foreground-window",
@@ -237,18 +375,20 @@ describe("PopupView", () => {
       },
       partial: {
         headword: "subtle",
+        inflections: [],
         translations: [
           {
             text: "delicate",
             note: TRANSLATION_NOTE_VALUES[2],
             example: {
               sentence: "The room had a subtle scent.",
-              japanese: "The room had a subtle scent.",
+              japanese: "She operates a small business.",
             },
           },
         ],
         nuance: "Understated rather than obvious.",
         synonyms: [],
+        idioms: [],
         warnings: [],
       },
     };
@@ -265,7 +405,9 @@ describe("PopupView", () => {
     expect(root.querySelector(".translation-row.content-reveal")).toBeInstanceOf(
       HTMLElement,
     );
-    expect(root.querySelector(".skeleton-block")).toBeInstanceOf(HTMLElement);
+    expect(root.querySelector(".skeleton-block")).toBeNull();
+    expect(root.textContent).not.toContain("Similar words");
+    expect(root.textContent).not.toContain("Idioms");
     expect(root.textContent).not.toContain("生成中");
   });
 
@@ -274,13 +416,17 @@ describe("PopupView", () => {
       kind: "streaming",
       shortcut: "Ctrl+Shift+X",
       requestId: 7,
+      mode: "word-study",
+      sourceText: null,
       phase: "streaming",
       capture: readyCapture(),
       partial: {
         headword: "subtle",
+        inflections: mockResult().inflections,
         translations: mockResult().translations,
         nuance: mockResult().nuance,
         synonyms: mockResult().synonyms,
+        idioms: mockResult().idioms,
         warnings: [],
       },
     };
@@ -317,19 +463,23 @@ describe("PopupView", () => {
       kind: "streaming",
       shortcut: "Ctrl+Shift+X",
       requestId: 7,
+      mode: "word-study",
+      sourceText: null,
       phase: "streaming",
       capture: readyCapture(),
       partial: {
         headword: "subtle",
+        inflections: [],
         translations: [],
         nuance: null,
         synonyms: [
           {
             term: "delicate",
-            japanese: "繊細な",
+            japanese: "She operates a small business.",
             usageComparison: "first comparison",
           },
         ],
+        idioms: [],
         warnings: [],
       },
     };
@@ -361,7 +511,7 @@ describe("PopupView", () => {
         synonyms: [
           {
             term: "slight",
-            japanese: "わずかな",
+            japanese: "She operates a small business.",
             usageComparison: "second comparison",
           },
         ],
@@ -435,6 +585,7 @@ describe("PopupView", () => {
             resultLanguage: "ja",
             promptMode: "word-study",
             apiKeyConfigured: false,
+            deeplApiKeyConfigured: false,
           }}
           activeResultTab="meaning"
           themeMode="light"
@@ -451,14 +602,20 @@ describe("PopupView", () => {
       root,
     );
 
-    expect(root.textContent).toContain("Provider");
+    expect(root.textContent).toContain("Word provider");
     expect(root.textContent).toContain("Shortcut");
     expect(root.textContent).toContain("Theme");
     expect(root.textContent).toContain("Background opacity");
     expect(root.textContent).toContain("30%");
     expect(root.textContent).toContain("Dark");
     expect(root.textContent).toContain("Gemini");
+    expect(root.textContent).toContain("DeepL APIキー");
     expect(root.textContent).not.toContain("Close");
+    expect(
+      Array.from(root.querySelectorAll("option")).some(
+        (option) => option.value === "deep-l",
+      ),
+    ).toBe(false);
     expect(root.querySelector(".settings-save")?.hasAttribute("disabled")).toBe(
       true,
     );
@@ -493,6 +650,71 @@ describe("PopupView", () => {
     root.remove();
   });
 
+  it("saves a DeepL key separately from the word provider key", async () => {
+    vi.mocked(invoke).mockResolvedValueOnce({
+      provider: "gemini",
+      models: [{ id: "gemini-2.5-flash-lite", label: "Gemini 2.5 Flash-Lite" }],
+      fetched: true,
+      warning: null,
+    });
+    const onSaveSettings = vi.fn(async () => undefined);
+    const root = document.createElement("div");
+    document.body.appendChild(root);
+
+    render(
+      () => (
+        <PopupView
+          state={readyState()}
+          settingsOpen
+          providerSettings={{
+            shortcut: "Ctrl+Shift+X",
+            backgroundOpacity: 0.94,
+            provider: "gemini",
+            model: "gemini-2.5-flash-lite",
+            resultLanguage: "ja",
+            promptMode: "word-study",
+            apiKeyConfigured: true,
+            deeplApiKeyConfigured: false,
+          }}
+          activeResultTab="meaning"
+          themeMode="light"
+          onClose={noop}
+          onRetry={noop}
+          onToggleSettings={noop}
+          onToggleTheme={noop}
+          onSaveSettings={onSaveSettings}
+          onSetResultTab={noop}
+        />
+      ),
+      root,
+    );
+
+    const deeplInput = Array.from(root.querySelectorAll("input")).find(
+      (input) => input.placeholder === "DeepL APIキー",
+    );
+    expect(deeplInput).toBeInstanceOf(HTMLInputElement);
+    deeplInput!.value = "deepl-secret";
+    deeplInput!.dispatchEvent(new Event("input", { bubbles: true }));
+
+    root
+      .querySelector("form")
+      ?.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true }));
+    await Promise.resolve();
+
+    expect(onSaveSettings).toHaveBeenCalledWith({
+      shortcut: "Ctrl+Shift+X",
+      backgroundOpacity: 0.94,
+      provider: "gemini",
+      model: "gemini-2.5-flash-lite",
+      resultLanguage: "ja",
+      promptMode: "word-study",
+      apiKey: null,
+      deeplApiKey: "deepl-secret",
+    });
+
+    root.remove();
+  });
+
   it("records shortcut changes from a key chord", async () => {
     vi.mocked(invoke).mockResolvedValueOnce({
       provider: "gemini",
@@ -517,6 +739,7 @@ describe("PopupView", () => {
             resultLanguage: "ja",
             promptMode: "word-study",
             apiKeyConfigured: true,
+            deeplApiKeyConfigured: false,
           }}
           activeResultTab="meaning"
           themeMode="light"
@@ -564,6 +787,7 @@ describe("PopupView", () => {
       resultLanguage: "ja",
       promptMode: "word-study",
       apiKey: null,
+      deeplApiKey: null,
     });
 
     root.remove();
@@ -594,6 +818,7 @@ describe("PopupView", () => {
             resultLanguage: "ja",
             promptMode: "word-study",
             apiKeyConfigured: true,
+            deeplApiKeyConfigured: false,
           }}
           activeResultTab="meaning"
           themeMode="light"
@@ -630,6 +855,7 @@ describe("PopupView", () => {
       resultLanguage: "ja",
       promptMode: "word-study",
       apiKey: null,
+      deeplApiKey: null,
     });
 
     root.remove();
@@ -662,6 +888,7 @@ describe("PopupView", () => {
             resultLanguage: "ja",
             promptMode: "word-study",
             apiKeyConfigured: true,
+            deeplApiKeyConfigured: false,
           }}
           activeResultTab="meaning"
           themeMode="light"
@@ -703,6 +930,7 @@ describe("PopupView", () => {
       resultLanguage: "ja",
       promptMode: "word-study",
       apiKey: null,
+      deeplApiKey: null,
     });
 
     root.remove();
@@ -710,6 +938,10 @@ describe("PopupView", () => {
 });
 
 describe("Lexi result schema", () => {
+  it("accepts text translation results", () => {
+    expect(validateLexiResultV1(mockTextTranslationResult()).ok).toBe(true);
+  });
+
   it("rejects translation notes that are not part-of-speech labels", () => {
     const result = mockResult();
     result.translations[0].note = "math" as never;
@@ -725,6 +957,44 @@ describe("Lexi result schema", () => {
     result.synonyms = [];
 
     expect(validateLexiResultV1(result).ok).toBe(true);
+  });
+
+  it("allows empty idioms", () => {
+    const result = mockResult();
+    result.idioms = [];
+
+    expect(validateLexiResultV1(result).ok).toBe(true);
+  });
+
+  it("allows irregular inflections", () => {
+    const result = mockResult();
+    result.inflections = [
+      { kind: "plural", form: "children" },
+      { kind: "past", form: "wrote" },
+      { kind: "pastParticiple", form: "written" },
+    ];
+
+    expect(validateLexiResultV1(result).ok).toBe(true);
+  });
+
+  it("rejects unknown inflection kinds", () => {
+    const result = mockResult();
+    result.inflections = [{ kind: "comparative", form: "better" } as never];
+
+    expect(validateLexiResultV1(result)).toEqual({
+      ok: false,
+      reason: "inflections must be an array of irregular forms",
+    });
+  });
+
+  it("rejects idioms without examples", () => {
+    const result = mockResult();
+    result.idioms[0].example = "";
+
+    expect(validateLexiResultV1(result)).toEqual({
+      ok: false,
+      reason: "idioms must be an array of idiom entries",
+    });
   });
 
   it("rejects translation entries without examples", () => {
@@ -750,6 +1020,7 @@ describe("App stream flow", () => {
           resultLanguage: "ja",
           promptMode: "word-study",
           apiKeyConfigured: true,
+            deeplApiKeyConfigured: false,
         });
       }
       if (command === "get_shortcut_status") {
@@ -821,3 +1092,4 @@ describe("App stream flow", () => {
     root.remove();
   });
 });
+
