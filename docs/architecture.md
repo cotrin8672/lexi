@@ -23,7 +23,7 @@ Rust backend:
 - `llm`: sends typed requests to the configured model provider and validates response shape.
 - `settings`: loads and saves user settings.
 - `errors`: defines stable error codes and user-safe diagnostics.
-- `schema`: defines `LexiResultV1` and rejects missing required fields or unknown schema versions.
+- `schema`: defines word-study and text-translation result contracts and rejects missing required fields or unknown schema versions.
 - `commands`: exposes narrow Tauri commands to the frontend.
 
 Solid frontend:
@@ -88,8 +88,8 @@ Phase 5 backend transform event:
 
 - `lexi:transform`
 - Emits `started`, `streaming`, `validating`, `ready`, or `failed`.
-- `started` carries a whitespace-normalized, 48-character `selectedTextPreview` so the popup can show the selected word immediately after the provider request begins.
-- `streaming` and `validating` carry a `LexiPartialResult` extracted from completed JSON fields only: headword, translations, nuance, synonyms, and warnings.
+- `started` carries a whitespace-normalized, 48-character `selectedTextPreview` so the popup can show the selected word or text preview immediately after the provider request begins.
+- `streaming` and `validating` carry a `LexiPartialResult` extracted from completed JSON fields only: headword, irregular inflections, translations, nuance, synonyms, idioms, and warnings.
 - Full raw selected text, raw prompt bodies, raw model chunks, and API keys are not emitted to the frontend; `selectedTextPreview` is the narrow UI-display exception.
 
 Phase 4 popup state:
@@ -97,14 +97,15 @@ Phase 4 popup state:
 - Solid state variants are `idle`, `capturing`, `requesting`, `ready`, and `error`.
 - `captured` events are treated as redacted metadata only and transition into a mock `requesting` state.
 - The frontend validates the mock `LexiResultV1` with `validateLexiResultV1` before rendering the `ready` state.
-- The word-study result renders as a single dictionary-card surface modeled after the editorial preview: a headword header, a nuance callout, translation rows with part-of-speech marks and examples, and similar-word rows with expandable usage comparisons.
+- The word-study result renders as a single dictionary-card surface modeled after the editorial preview: a headword header with optional irregular inflections, a nuance callout, translation rows with part-of-speech marks and examples, similar-word rows with expandable usage comparisons, and idiom rows with Japanese meanings and examples.
+- The text-translation result renders as a simpler translation surface with the translated text first and a compact source/translation segment section below it.
 - Result actions are copy, retry, close, and settings. Copy writes only the structured mock result text, not captured source text.
 - Phase 5 removes the bottom result action bar. Settings opens from a header gear button and exposes provider, provider-backed model dropdown, embedded result-language dropdown, and API key update fields.
 - The settings panel also exposes a shortcut recorder. Saving settings sends the recorded key chord through the Rust command boundary; the backend validates, normalizes, persists, and re-registers the shortcut immediately. If registration fails, the previous registered shortcut is restored and the frontend receives a `ShortcutRegistrationFailed` error.
 - The settings panel also exposes a persisted background opacity slider. It updates a CSS custom property on the popup shell for background fills, borders, and shadows without reducing text or icon opacity, and saves through the Rust-owned settings file.
 - The popup window opens at a 500 by 620 default size with 360 by 360 minimum constraints and remains resizable. The frontend shell uses responsive constraints and pane-level scrolling so long result text does not clip at narrow widths.
 - The Tauri window enables `transparent`, and the frontend keeps `html`, `body`, `#root`, and the full-window shell free of opaque fills so the popup backdrop can be translucent on supported desktops.
-- During capturing, requesting, and streaming states, the dictionary-card body keeps the final layout visible with skeleton placeholders. Completed nuance, translation, and similar-word fields are inserted into their final positions with a short fade-in animation.
+- During capturing, requesting, and streaming states, the dictionary-card body keeps the final layout visible with skeleton placeholders. Completed nuance, translation, similar-word, and idiom fields are inserted into their final positions with a short fade-in animation.
 
 Temporary PoC binary:
 
@@ -155,7 +156,9 @@ Initial provider policy:
 - API key values are accepted from the settings UI but are never returned to the frontend after save.
 - Gemini and OpenAI transform calls use provider streaming endpoints where available. Partial JSON is accumulated in Rust, then only completed schema fields are emitted as partial UI state. The final response must still pass strict `LexiResultV1` validation before the app treats it as complete.
 
-Provider responses must be parsed into a versioned Rust struct before frontend rendering. The frontend should render validated data, not raw model text. For the first workflow, the model is expected to return structured word-study data: a dictionary/base-form headword for single inflected words, one to three dictionary-style Japanese sense entries with a `null` or enumerated part-of-speech note, one short example sentence plus Japanese translation per sense entry, an intuitive usage nuance for the headword, optional near-word synonyms with per-word usage comparisons, and warnings when useful data is unavailable. Translation entries should be separated by real English-side dictionary sense boundaries such as part of speech, countability, transitivity, concrete versus abstract use, legal/social versus technical use, or idiomatic use. The provider prompt should collapse near-duplicate Japanese paraphrases, alternative renderings, and collocation differences instead of filling the list with repeated explanations or Japanese synonyms such as `近づく` and `接近する`; examples like `採用` versus `採択` for `adoption`, or `デモ` versus `実演` for the same `demonstration` sense, should be merged unless they represent truly separate English senses. Antonyms are omitted from the current result contract.
+Provider responses must be parsed into a versioned Rust struct before frontend rendering. The frontend should render validated data, not raw model text. Word-study mode uses the configured LLM provider and expects structured dictionary data: a dictionary/base-form headword for single inflected words, optional irregular inflections for noun plurals and verb past or past participle forms, one to three dictionary-style Japanese sense entries with a `null` or enumerated part-of-speech note, one short example sentence plus Japanese translation per sense entry, an intuitive usage nuance for the headword, optional near-word synonyms with per-word usage comparisons, optional idioms with Japanese meanings and short English examples, and warnings when useful data is unavailable. Translation entries should be separated by real English-side dictionary sense boundaries such as part of speech, countability, transitivity, concrete versus abstract use, legal/social versus technical use, or idiomatic use. The provider prompt should collapse near-duplicate Japanese paraphrases, alternative renderings, and collocation differences instead of filling the list with repeated explanations or Japanese synonyms such as `近づく` and `接近する`; examples like `採用` versus `採択` for `adoption`, or `デモ` versus `実演` for the same `demonstration` sense, should be merged unless they represent truly separate English senses. Antonyms are omitted from the word-study contract.
+
+Text-translation mode is selected by backend heuristics before provider dispatch when the captured text looks sentence-like: newline, sentence punctuation, clause punctuation, or five or more whitespace-delimited tokens. It uses DeepL and wraps the response in `lexi.text-translation.v1` with `translatedText`, optional detected source language, source/translation segments, and warnings. The first implementation emits one full-selection segment; later alignment can split segments without changing the top-level mode.
 
 ## Security and Privacy
 

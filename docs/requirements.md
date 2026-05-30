@@ -16,7 +16,7 @@ In scope:
 - Global shortcut activation.
 - Selected-text acquisition through a native Windows backend pipeline: clipboard-preserving copy first for low latency, then Windows UI Automation where supported.
 - Compact popup UI for loading, result, copy, retry, and error states.
-- One LLM transformation workflow with a typed output schema.
+- Two typed transformation workflows: word study for single words and short phrases, and text translation for sentence-like selections.
 - Local settings for shortcut, provider configuration, model name, API key state, and prompt preset.
 - Focused logging that excludes selected text and model payloads.
 
@@ -33,13 +33,13 @@ Out of scope for the first release:
 - The app registers a configurable global shortcut on startup.
 - When the shortcut fires, the app attempts to read the current foreground selection.
 - If selected text is available, the app opens a small popup near the active context or at a deterministic fallback position.
-- The app sends the selected text and selected prompt preset to the configured LLM provider immediately after backend capture succeeds.
+- The app classifies the selected text after backend capture succeeds. Single words and short phrase-like selections use the configured LLM word-study provider; sentence-like selections use DeepL text translation.
 - Once the provider request starts, the popup should show a normalized preview of the selected word/text in the headword slot while the structured response is still pending.
 - The app should consume provider responses as streams where supported and render completed partial fields before the final response is validated.
 - While selection capture or structured response fields are pending, the popup should reserve the final result layout with skeleton placeholders and fade each field in as soon as that field is available.
 - The app validates the response against the expected schema before rendering it.
-- The default low-cost provider is Gemini, with OpenAI available as the fallback provider when Gemini responses are not stable enough.
-- The user can change shortcut, provider, model, result language, and API key from the popup settings panel.
+- The default low-cost word-study provider is Gemini, with OpenAI available as the fallback provider when Gemini responses are not stable enough. Sentence-like translation uses DeepL when a DeepL API key is configured.
+- The user can change shortcut, provider, model, result language, and API key from the popup settings panel. DeepL keys are stored through the same provider-key mechanism and are used for sentence-like translation.
 - The user can adjust and persist the popup backdrop opacity from the popup settings panel.
 - Model settings are selected from a provider model-list endpoint when an API key is configured, with a small default fallback list when model-list retrieval is unavailable.
 - Result language settings are selected from an embedded dropdown list instead of a free-form text field.
@@ -76,7 +76,7 @@ Out of scope for the first release:
 
 - First screen is the actual popup/work surface, not a landing page.
 - The popup should open at a stable default size but remain user-resizable within minimum constraints; loading text, long words, and errors should wrap or scroll inside their panes instead of clipping.
-- Primary result rendering is a single dictionary-card layout with the headword, nuance, translations, and similar words visible in one scrollable surface.
+- Word-study result rendering is a single dictionary-card layout with the headword, nuance, translations, and similar words visible in one scrollable surface. Text-translation result rendering is a simpler translation surface with the translated text and a source/translation segment view.
 - The desktop popup window should support a transparent webview background, with the page backdrop rendered as a subtle translucent layer rather than an opaque full-window fill.
 - Pending capture and result areas should use skeleton placeholders instead of repeated loading text, so the result layout remains stable while streaming fields arrive.
 - Settings opens from a header gear button, not a bottom action bar.
@@ -98,6 +98,12 @@ Initial schema draft for the first word-study workflow:
   "sourceLanguage": "auto",
   "resultLanguage": "ja",
   "headword": "string",
+  "inflections": [
+    {
+      "kind": "plural | past | pastParticiple",
+      "form": "string"
+    }
+  ],
   "translations": [
     {
       "text": "string",
@@ -116,6 +122,13 @@ Initial schema draft for the first word-study workflow:
       "usageComparison": "string"
     }
   ],
+  "idioms": [
+    {
+      "idiom": "string",
+      "japanese": "string",
+      "example": "string"
+    }
+  ],
   "warnings": ["string"]
 }
 ```
@@ -125,6 +138,7 @@ Rules:
 - `schemaVersion` is required.
 - `headword`, `translations`, and `nuance` are required for rendering.
 - `headword` should be the dictionary/base form for a single inflected word when the base form is known, for example `went` should render as `go`.
+- `inflections` should contain only irregular English forms for the headword: irregular noun plurals, irregular verb past forms, and irregular verb past participles. Use an empty array for regular forms or unavailable data.
 - `translations` must contain at least one Japanese translation.
 - `translations` should be dictionary-style Japanese sense entries, not explanation sentences, Japanese synonym lists, or multiple Japanese renderings of the same English meaning. Use one to three entries only when they represent real English-side dictionary sense boundaries such as part of speech, countable versus uncountable use, transitive versus intransitive use, concrete versus abstract use, legal/social versus technical use, or established idiomatic use. Near-duplicate Japanese paraphrases should be collapsed into the broadest common dictionary equivalent. Different Japanese collocations alone are not enough to split entries; for example, `採用` and `採択` should not be separate entries for `adoption` unless they reflect genuinely different English dictionary senses, and `デモ` and `実演` should not be separate entries for the same showing-how-something-works sense of `demonstration`.
 - Each translation `note` must be `null` or one of these part-of-speech labels: `名詞`, `動詞`, `形容詞`, `副詞`, `前置詞`, `接続詞`, `代名詞`, `助動詞`, `冠詞`, `間投詞`, `句`, `成句`, `接頭辞`, `接尾辞`. Semantic domains such as math, comparison, or technical field labels are not allowed in `note`.
@@ -132,8 +146,37 @@ Rules:
 - `nuance` should be an intuitive explanation for deciding when the headword is appropriate.
 - `synonyms` may be empty when reliable near words are unavailable; otherwise it should contain near words that help the user learn practical usage distinctions.
 - Each synonym must include the English term, Japanese meaning, and a direct `usageComparison` sentence against the headword.
+- `idioms` may be empty when reliable idioms are unavailable; otherwise it should contain up to three common idioms or fixed expressions associated with the headword.
+- Each idiom must include the English idiom, Japanese meaning, and one short English example sentence.
 - Antonyms are intentionally omitted from the first word-study result.
 - The renderer must reject unknown or missing schema versions instead of guessing.
+
+Text translation schema:
+
+```json
+{
+  "schemaVersion": "lexi.text-translation.v1",
+  "mode": "text-translation",
+  "sourceLanguage": "auto",
+  "detectedSourceLanguage": "string or null",
+  "resultLanguage": "ja",
+  "translatedText": "string",
+  "segments": [
+    {
+      "source": "string",
+      "translation": "string"
+    }
+  ],
+  "warnings": ["string"]
+}
+```
+
+Rules:
+
+- `translatedText` is required and should contain the full translated selection.
+- `segments` may start as a single source/translation pair and can be expanded later for sentence-by-sentence alignment.
+- Raw provider responses must be wrapped in this schema before frontend rendering.
+- Sentence-like selections are detected by backend heuristics such as newline, sentence punctuation, clause punctuation, or five or more whitespace-delimited tokens.
 
 ## Error Handling
 
