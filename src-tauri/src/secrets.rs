@@ -48,6 +48,7 @@ fn env_var_names(provider: ProviderKind) -> &'static [&'static str] {
         ProviderKind::Mock => &[],
         ProviderKind::Gemini => &["GEMINI_API_KEY", "GOOGLE_API_KEY"],
         ProviderKind::OpenAi => &["OPENAI_API_KEY"],
+        ProviderKind::DeepL => &["DEEPL_API_KEY", "DEEPL_AUTH_KEY"],
     }
 }
 

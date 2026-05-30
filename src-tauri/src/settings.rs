@@ -9,6 +9,7 @@ pub enum ProviderKind {
     Mock,
     Gemini,
     OpenAi,
+    DeepL,
 }
 
 impl ProviderKind {
@@ -17,6 +18,7 @@ impl ProviderKind {
             Self::Mock => "mock-word-study",
             Self::Gemini => "gemini-2.5-flash-lite",
             Self::OpenAi => "gpt-5.4-nano",
+            Self::DeepL => "deepl-translate",
         }
     }
 
@@ -25,6 +27,7 @@ impl ProviderKind {
             Self::Mock => "mock",
             Self::Gemini => "gemini",
             Self::OpenAi => "openai",
+            Self::DeepL => "deepl",
         }
     }
 }
@@ -65,6 +68,7 @@ pub struct ProviderSettingsView {
     pub result_language: String,
     pub prompt_mode: String,
     pub api_key_configured: bool,
+    pub deepl_api_key_configured: bool,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -77,6 +81,7 @@ pub struct ProviderSettingsUpdate {
     pub result_language: String,
     pub prompt_mode: String,
     pub api_key: Option<String>,
+    pub deepl_api_key: Option<String>,
 }
 
 #[derive(Debug, Default)]
@@ -136,6 +141,15 @@ impl SettingsState {
             ));
         }
 
+        if update.provider == ProviderKind::DeepL {
+            return Err(AppError::new(
+                crate::errors::AppErrorCode::ProviderNotConfigured,
+                "DeepL is used automatically for sentence translation.",
+                "DeepL cannot be selected as the word-study provider",
+                false,
+            ));
+        }
+
         let normalized_shortcut = shortcut::normalize_shortcut_label(&update.shortcut)?;
         let background_opacity = validate_background_opacity(update.background_opacity)?;
 
@@ -152,6 +166,13 @@ impl SettingsState {
             let trimmed = api_key.trim();
             if !trimmed.is_empty() {
                 secrets::write_api_key(update.provider, trimmed)?;
+            }
+        }
+
+        if let Some(api_key) = update.deepl_api_key {
+            let trimmed = api_key.trim();
+            if !trimmed.is_empty() {
+                secrets::write_api_key(ProviderKind::DeepL, trimmed)?;
             }
         }
 
@@ -195,6 +216,7 @@ pub fn update_provider_settings(
 
 fn settings_view(app: &AppHandle, settings: ProviderSettings) -> ProviderSettingsView {
     let api_key_configured = has_api_key(app, settings.provider);
+    let deepl_api_key_configured = has_api_key(app, ProviderKind::DeepL);
     ProviderSettingsView {
         shortcut: settings.shortcut,
         background_opacity: settings.background_opacity,
@@ -203,6 +225,7 @@ fn settings_view(app: &AppHandle, settings: ProviderSettings) -> ProviderSetting
         result_language: settings.result_language,
         prompt_mode: settings.prompt_mode,
         api_key_configured,
+        deepl_api_key_configured,
     }
 }
 
@@ -216,9 +239,16 @@ fn read_settings(app: &AppHandle) -> Result<ProviderSettings, AppError> {
         AppError::provider_request_failed(format!("provider settings read failed: {error}"), true)
     })?;
 
-    serde_json::from_str(&raw).map_err(|error| {
+    let mut settings = serde_json::from_str::<ProviderSettings>(&raw).map_err(|error| {
         AppError::provider_request_failed(format!("provider settings parse failed: {error}"), false)
-    })
+    })?;
+
+    if settings.provider == ProviderKind::DeepL {
+        settings.provider = ProviderKind::Gemini;
+        settings.model = ProviderKind::Gemini.default_model().to_string();
+    }
+
+    Ok(settings)
 }
 
 fn write_settings(app: &AppHandle, settings: &ProviderSettings) -> Result<(), AppError> {

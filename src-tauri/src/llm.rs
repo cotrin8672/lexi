@@ -1,8 +1,11 @@
 use crate::{
     errors::AppError,
+    secrets,
     schema::{
-        parse_lexi_result_v1, ExampleSentence, LexiResultV1, RelatedWord, Translation,
-        LEXI_RESULT_V1_SCHEMA_VERSION, TRANSLATION_NOTE_VALUES,
+        parse_lexi_result_v1, ExampleSentence, Idiom, Inflection, LexiResult, LexiResultV1,
+        RelatedWord, TextTranslationResultV1, Translation, TranslationSegment,
+        LEXI_RESULT_V1_SCHEMA_VERSION, LEXI_TEXT_TRANSLATION_V1_SCHEMA_VERSION,
+        TRANSLATION_NOTE_VALUES,
     },
     settings::{ProviderKind, SettingsState},
 };
@@ -19,6 +22,12 @@ const REQUEST_TIMEOUT_MS: u64 = 60_000;
 const MAX_OUTPUT_TOKENS: u32 = 2048;
 const TRANSFORM_EVENT: &str = "lexi:transform";
 static NEXT_REQUEST_ID: AtomicU64 = AtomicU64::new(1);
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum TransformMode {
+    WordStudy,
+    TextTranslation,
+}
 
 #[derive(Debug, Default)]
 pub struct SelectedTextState {
@@ -60,7 +69,7 @@ pub struct TransformRequest {
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct TransformResult {
-    pub result: LexiResultV1,
+    pub result: LexiResult,
     pub provider: ProviderKind,
     pub model: String,
 }
@@ -90,9 +99,11 @@ pub struct TransformCaptureInput {
 #[serde(rename_all = "camelCase")]
 pub struct LexiPartialResult {
     pub headword: Option<String>,
+    pub inflections: Vec<Inflection>,
     pub translations: Vec<Translation>,
     pub nuance: Option<String>,
     pub synonyms: Vec<RelatedWord>,
+    pub idioms: Vec<Idiom>,
     pub warnings: Vec<String>,
 }
 
@@ -112,6 +123,7 @@ pub enum TransformEvent {
     Started {
         request_id: u64,
         selected_text_preview: String,
+        selected_text: Option<String>,
         shortcut: String,
         capture_method: &'static str,
         source_process: Option<String>,
@@ -131,7 +143,7 @@ pub enum TransformEvent {
     },
     Ready {
         request_id: u64,
-        result: LexiResultV1,
+        result: LexiResult,
         provider: ProviderKind,
         model: String,
     },
@@ -145,36 +157,41 @@ impl LexiPartialResult {
     fn from_result(result: &LexiResultV1) -> Self {
         Self {
             headword: Some(result.headword.clone()),
+            inflections: result.inflections.clone(),
             translations: result.translations.clone(),
             nuance: Some(result.nuance.clone()),
             synonyms: result.synonyms.clone(),
+            idioms: result.idioms.clone(),
             warnings: result.warnings.clone(),
         }
     }
 
     fn is_empty(&self) -> bool {
         self.headword.is_none()
+            && self.inflections.is_empty()
             && self.translations.is_empty()
             && self.nuance.is_none()
             && self.synonyms.is_empty()
+            && self.idioms.is_empty()
             && self.warnings.is_empty()
     }
 }
 
 pub trait LlmProvider {
-    fn transform(&self, request: &TransformRequest) -> Result<LexiResultV1, AppError>;
+    fn transform(&self, request: &TransformRequest) -> Result<LexiResult, AppError>;
 }
 
 pub struct MockProvider;
 
 impl LlmProvider for MockProvider {
-    fn transform(&self, request: &TransformRequest) -> Result<LexiResultV1, AppError> {
-        Ok(LexiResultV1 {
+    fn transform(&self, request: &TransformRequest) -> Result<LexiResult, AppError> {
+        Ok(LexiResult::WordStudy(LexiResultV1 {
             schema_version: LEXI_RESULT_V1_SCHEMA_VERSION.to_string(),
             mode: "word-study".to_string(),
             source_language: "auto".to_string(),
             result_language: request.result_language.clone(),
             headword: mock_headword(&request.selected_text),
+            inflections: mock_inflections(&request.selected_text),
             translations: vec![crate::schema::Translation {
                 text: "確認用の訳語".to_string(),
                 note: None,
@@ -185,10 +202,15 @@ impl LlmProvider for MockProvider {
             }],
             nuance: "MockProvider による構造化レスポンスです。".to_string(),
             synonyms: vec![],
+            idioms: vec![Idiom {
+                idiom: "in practice".to_string(),
+                japanese: "in practice".to_string(),
+                example: "In practice, the mock provider returns fixed data.".to_string(),
+            }],
             warnings: vec![
                 "Provider 設定が mock のため、実際の API は呼び出していません。".to_string(),
             ],
-        })
+        }))
     }
 }
 
@@ -215,6 +237,32 @@ fn mock_headword(selected_text: &str) -> String {
     lemma.chars().take(48).collect()
 }
 
+fn mock_inflections(selected_text: &str) -> Vec<Inflection> {
+    match mock_headword(selected_text).as_str() {
+        "go" => vec![
+            Inflection {
+                kind: "past".to_string(),
+                form: "went".to_string(),
+            },
+            Inflection {
+                kind: "pastParticiple".to_string(),
+                form: "gone".to_string(),
+            },
+        ],
+        "run" => vec![
+            Inflection {
+                kind: "past".to_string(),
+                form: "ran".to_string(),
+            },
+            Inflection {
+                kind: "pastParticiple".to_string(),
+                form: "run".to_string(),
+            },
+        ],
+        _ => vec![],
+    }
+}
+
 fn selected_text_preview(selected_text: &str) -> String {
     selected_text
         .split_whitespace()
@@ -223,6 +271,42 @@ fn selected_text_preview(selected_text: &str) -> String {
         .chars()
         .take(48)
         .collect()
+}
+
+fn classify_transform_mode(selected_text: &str) -> TransformMode {
+    let trimmed = selected_text.trim();
+    if trimmed.is_empty() {
+        return TransformMode::WordStudy;
+    }
+
+    let token_count = trimmed.split_whitespace().count();
+    let has_newline = trimmed.contains('\n') || trimmed.contains('\r');
+    let has_sentence_terminal = trimmed
+        .chars()
+        .any(|character| matches!(character, '.' | '?' | '!' | '。' | '？' | '！'));
+    let has_clause_punctuation = trimmed
+        .chars()
+        .any(|character| matches!(character, ',' | ';' | ':' | '、' | '，' | '；' | '：'));
+
+    if has_newline || has_sentence_terminal || has_clause_punctuation || token_count >= 5 {
+        TransformMode::TextTranslation
+    } else {
+        TransformMode::WordStudy
+    }
+}
+
+fn provider_for_mode(settings_provider: ProviderKind, mode: TransformMode) -> ProviderKind {
+    match mode {
+        TransformMode::WordStudy => settings_provider,
+        TransformMode::TextTranslation => ProviderKind::DeepL,
+    }
+}
+
+fn model_for_mode(settings_model: &str, mode: TransformMode) -> &str {
+    match mode {
+        TransformMode::WordStudy => settings_model,
+        TransformMode::TextTranslation => ProviderKind::DeepL.default_model(),
+    }
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -247,7 +331,7 @@ pub async fn list_provider_models(
     settings_state: tauri::State<'_, SettingsState>,
     provider: ProviderKind,
 ) -> Result<ProviderModelsResult, AppError> {
-    if provider == ProviderKind::Mock {
+    if provider == ProviderKind::Mock || provider == ProviderKind::DeepL {
         return Ok(ProviderModelsResult {
             provider,
             models: fallback_models(provider),
@@ -333,26 +417,58 @@ async fn run_transform_stream_for_capture(
         result_language: settings.result_language.clone(),
         prompt_mode: settings.prompt_mode.clone(),
     };
+    let transform_mode = classify_transform_mode(&request.selected_text);
 
     let _ = app.emit(
         TRANSFORM_EVENT,
         TransformEvent::Started {
             request_id,
             selected_text_preview,
+            selected_text: if transform_mode == TransformMode::TextTranslation {
+                Some(request.selected_text.clone())
+            } else {
+                None
+            },
             shortcut: capture.shortcut,
             capture_method: capture.capture_method,
             source_process: capture.source_process,
             source_window_title: capture.source_window_title,
             character_count: capture.character_count,
             multiline: capture.multiline,
-            provider: settings.provider,
-            model: settings.model.clone(),
+            provider: provider_for_mode(settings.provider, transform_mode),
+            model: model_for_mode(&settings.model, transform_mode).to_string(),
         },
     );
 
+    if transform_mode == TransformMode::TextTranslation {
+        let api_key = secrets::read_api_key(ProviderKind::DeepL)?
+            .filter(|key| !key.trim().is_empty())
+            .ok_or_else(|| AppError::provider_not_configured("DeepL API key is not configured"))?;
+        let result = call_deepl_text_translation(&api_key, &request).await?;
+        let _ = app.emit(
+            TRANSFORM_EVENT,
+            TransformEvent::Ready {
+                request_id,
+                result: LexiResult::TextTranslation(result),
+                provider: ProviderKind::DeepL,
+                model: ProviderKind::DeepL.default_model().to_string(),
+            },
+        );
+        return Ok(());
+    }
+
+    if settings.provider == ProviderKind::DeepL {
+        return Err(AppError::provider_not_configured(
+            "DeepL only supports text translation; choose Gemini or OpenAI for word study",
+        ));
+    }
+
     if settings.provider == ProviderKind::Mock {
         let result = MockProvider.transform(&request)?;
-        let partial = LexiPartialResult::from_result(&result);
+        let LexiResult::WordStudy(word_result) = result else {
+            unreachable!("mock provider only returns word-study results")
+        };
+        let partial = LexiPartialResult::from_result(&word_result);
         let _ = app.emit(
             TRANSFORM_EVENT,
             TransformEvent::Streaming {
@@ -364,7 +480,7 @@ async fn run_transform_stream_for_capture(
             TRANSFORM_EVENT,
             TransformEvent::Ready {
                 request_id,
-                result,
+                result: LexiResult::WordStudy(word_result),
                 provider: settings.provider,
                 model: settings.model,
             },
@@ -390,6 +506,7 @@ async fn run_transform_stream_for_capture(
             call_openai_stream(&app, request_id, &api_key, &settings.model, &request).await?
         }
         ProviderKind::Mock => unreachable!("mock provider returned above"),
+        ProviderKind::DeepL => unreachable!("DeepL text translation returned above"),
     };
     let partial = partial_from_json_fragment(&raw_json);
     let _ = app.emit(
@@ -404,7 +521,7 @@ async fn run_transform_stream_for_capture(
         TRANSFORM_EVENT,
         TransformEvent::Ready {
             request_id,
-            result,
+            result: LexiResult::WordStudy(result),
             provider: settings.provider,
             model: settings.model,
         },
@@ -452,6 +569,25 @@ pub async fn run_transform(
         result_language: settings.result_language.clone(),
         prompt_mode: settings.prompt_mode.clone(),
     };
+    let transform_mode = classify_transform_mode(&request.selected_text);
+
+    if transform_mode == TransformMode::TextTranslation {
+        let api_key = secrets::read_api_key(ProviderKind::DeepL)?
+            .filter(|key| !key.trim().is_empty())
+            .ok_or_else(|| AppError::provider_not_configured("DeepL API key is not configured"))?;
+        let result = call_deepl_text_translation(&api_key, &request).await?;
+        return Ok(TransformResult {
+            result: LexiResult::TextTranslation(result),
+            provider: ProviderKind::DeepL,
+            model: ProviderKind::DeepL.default_model().to_string(),
+        });
+    }
+
+    if settings.provider == ProviderKind::DeepL {
+        return Err(AppError::provider_not_configured(
+            "DeepL only supports text translation; choose Gemini or OpenAI for word study",
+        ));
+    }
 
     if settings.provider == ProviderKind::Mock {
         let result = MockProvider.transform(&request)?;
@@ -476,10 +612,11 @@ pub async fn run_transform(
         ProviderKind::Gemini => call_gemini(&api_key, &settings.model, &request).await?,
         ProviderKind::OpenAi => call_openai(&api_key, &settings.model, &request).await?,
         ProviderKind::Mock => unreachable!("mock provider returned above"),
+        ProviderKind::DeepL => unreachable!("DeepL text translation returned above"),
     };
 
     Ok(TransformResult {
-        result,
+        result: LexiResult::WordStudy(result),
         provider: settings.provider,
         model: settings.model,
     })
@@ -496,10 +633,17 @@ Hard requirements:
 - Keep the result compact enough for a small desktop popup.
 - If the selection is a single inflected word, set headword to its dictionary/base form, not the selected surface form. Examples: went -> go, ran -> run, studied -> study, better -> good.
 - If the selection is a sentence, choose the central word or phrase as headword and normalize that headword to its dictionary/base form when possible.
+- Return inflections only for irregular noun plural forms or irregular verb past/past participle forms. Use an empty inflections array for regular forms, adjectives, adverbs, phrases without a clear headword, or uncertain data.
 - If reliable synonyms are unavailable, use an empty array instead of guessing.
+- If useful idioms containing or strongly associated with the headword are unavailable, use an empty idioms array instead of guessing.
 
 Field contract:
 - headword: canonical dictionary/base form or short phrase, max 48 characters. Do not copy an inflected selected word such as a past-tense verb when a base form is known.
+- inflections: 0 to 3 irregular forms for the headword only.
+  - kind must be exactly "plural", "past", or "pastParticiple".
+  - form is the irregular English form only, max 48 characters.
+  - Include noun plural only when irregular, for example child -> children or mouse -> mice. Do not include regular plurals like books.
+  - Include verb past and/or past participle only when irregular, for example go -> went/gone or write -> wrote/written. Do not include regular forms like studied/studied.
 - translations: dictionary-style Japanese sense entries, not nuance explanations, not a thesaurus, not a list of alternative Japanese renderings, and not a vocabulary expansion list. Return 1 to 3 items only when each item represents a distinct English dictionary sense that should be learned separately.
   - text must be a compact Japanese equivalent or established Japanese expression that can stand as a dictionary meaning entry.
   - Prefer one broad entry when several Japanese words translate the same English sense. Put comma-separated Japanese alternatives in one text value only when that is clearer than choosing one broad equivalent.
@@ -518,6 +662,10 @@ Field contract:
   - term: a real common near word.
   - japanese: concise meaning.
   - usageComparison: one direct sentence comparing the synonym with the headword. Explain when to choose the headword and when to choose this synonym, max 110 Japanese characters.
+- idioms: 0 to 3 common idioms, fixed expressions, or phrasal expressions that contain or strongly feature the headword. Prefer expressions that help a learner recognize natural usage.
+  - idiom: the English idiom or expression, max 64 characters.
+  - japanese: concise Japanese meaning, max 64 characters.
+  - example: one short natural English example sentence using the idiom, max 120 characters.
 - warnings: empty unless the input is ambiguous, too short, not a word/phrase, or confidence is low.
 
 Quality rules:
@@ -529,6 +677,8 @@ Quality rules:
 - A Japanese synonym, register difference, or wording preference is not a sense boundary. Do not split entries for pairs like 近づく/接近する, 始める/開始する, 使う/使用する, わずかな/少しの.
 - Keep each translation example short and aligned with that translation's specific sense.
 - Do not repeat the same information across headword nuance and synonym usageComparison.
+- Do not pad idioms. Return only established expressions; do not invent examples as idiom labels.
+- Do not pad inflections. Regular forms must be omitted.
 - Do not pad arrays to hit counts.
 - Preserve selected text privacy; never quote more than needed for headword/examples.
 
@@ -548,6 +698,7 @@ async fn fetch_provider_models(
         ProviderKind::Mock => Ok(fallback_models(provider)),
         ProviderKind::Gemini => fetch_gemini_models(api_key).await,
         ProviderKind::OpenAi => fetch_openai_models(api_key).await,
+        ProviderKind::DeepL => Ok(fallback_models(provider)),
     }
 }
 
@@ -678,6 +829,10 @@ fn fallback_models(provider: ProviderKind) -> Vec<ProviderModel> {
             id: "mock-word-study".to_string(),
             label: "Mock word-study".to_string(),
         }],
+        ProviderKind::DeepL => vec![ProviderModel {
+            id: "deepl-translate".to_string(),
+            label: "DeepL Translate".to_string(),
+        }],
     }
 }
 
@@ -695,9 +850,11 @@ fn lexi_result_schema() -> Value {
             "sourceLanguage",
             "resultLanguage",
             "headword",
+            "inflections",
             "translations",
             "nuance",
             "synonyms",
+            "idioms",
             "warnings"
         ],
         "properties": {
@@ -706,6 +863,7 @@ fn lexi_result_schema() -> Value {
             "sourceLanguage": { "type": "string" },
             "resultLanguage": { "type": "string" },
             "headword": { "type": "string" },
+            "inflections": { "type": "array", "minItems": 0, "maxItems": 3, "items": { "$ref": "#/$defs/inflection" } },
             "translations": {
                 "type": "array",
                 "minItems": 1,
@@ -723,6 +881,7 @@ fn lexi_result_schema() -> Value {
             },
             "nuance": { "type": "string" },
             "synonyms": { "type": "array", "minItems": 0, "maxItems": 4, "items": { "$ref": "#/$defs/relatedWord" } },
+            "idioms": { "type": "array", "minItems": 0, "maxItems": 3, "items": { "$ref": "#/$defs/idiom" } },
             "warnings": { "type": "array", "items": { "type": "string" } }
         },
         "$defs": {
@@ -743,6 +902,25 @@ fn lexi_result_schema() -> Value {
                     "term": { "type": "string" },
                     "japanese": { "type": "string" },
                     "usageComparison": { "type": "string" }
+                }
+            },
+            "idiom": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["idiom", "japanese", "example"],
+                "properties": {
+                    "idiom": { "type": "string" },
+                    "japanese": { "type": "string" },
+                    "example": { "type": "string" }
+                }
+            },
+            "inflection": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["kind", "form"],
+                "properties": {
+                    "kind": { "type": "string", "enum": ["plural", "past", "pastParticiple"] },
+                    "form": { "type": "string" }
                 }
             }
         }
@@ -1108,6 +1286,75 @@ async fn call_gemini(
     parse_lexi_result_v1(content)
 }
 
+async fn call_deepl_text_translation(
+    api_key: &str,
+    request: &TransformRequest,
+) -> Result<TextTranslationResultV1, AppError> {
+    let client = reqwest_client()?;
+    let target_lang = deepl_target_language(&request.result_language);
+    let response = client
+        .post(deepl_translate_url(api_key))
+        .header("Authorization", format!("DeepL-Auth-Key {api_key}"))
+        .form(&[
+            ("text", request.selected_text.as_str()),
+            ("target_lang", target_lang.as_str()),
+        ])
+        .send()
+        .await
+        .map_err(|error| {
+            AppError::provider_request_failed(format!("DeepL request failed: {error}"), true)
+        })?;
+
+    if !response.status().is_success() {
+        return Err(AppError::provider_request_failed(
+            format!("DeepL request returned HTTP {}", response.status()),
+            response.status().as_u16() == 429 || response.status().is_server_error(),
+        ));
+    }
+
+    let payload = response.json::<DeepLTranslateResponse>().await.map_err(|error| {
+        AppError::invalid_model_output(format!("DeepL response parse failed: {error}"))
+    })?;
+    let translation = payload
+        .translations
+        .first()
+        .ok_or_else(|| AppError::invalid_model_output("DeepL response had no translations"))?;
+
+    TextTranslationResultV1 {
+        schema_version: LEXI_TEXT_TRANSLATION_V1_SCHEMA_VERSION.to_string(),
+        mode: "text-translation".to_string(),
+        source_language: "auto".to_string(),
+        detected_source_language: translation.detected_source_language.clone(),
+        result_language: request.result_language.clone(),
+        translated_text: translation.text.clone(),
+        segments: vec![TranslationSegment {
+            source: request.selected_text.clone(),
+            translation: translation.text.clone(),
+        }],
+        warnings: vec![],
+    }
+    .validate()
+}
+
+fn deepl_target_language(result_language: &str) -> String {
+    match result_language.trim().to_ascii_lowercase().as_str() {
+        "ja" | "jp" => "JA".to_string(),
+        "en" => "EN-US".to_string(),
+        "ko" => "KO".to_string(),
+        "zh" | "zh-cn" | "zh_cn" => "ZH-HANS".to_string(),
+        "zh-tw" | "zh_tw" => "ZH-HANT".to_string(),
+        other => other.to_ascii_uppercase(),
+    }
+}
+
+fn deepl_translate_url(api_key: &str) -> &'static str {
+    if api_key.trim().ends_with(":fx") {
+        "https://api-free.deepl.com/v2/translate"
+    } else {
+        "https://api.deepl.com/v2/translate"
+    }
+}
+
 fn gemini_lexi_result_schema() -> Value {
     json!({
         "type": "OBJECT",
@@ -1117,9 +1364,11 @@ fn gemini_lexi_result_schema() -> Value {
             "sourceLanguage",
             "resultLanguage",
             "headword",
+            "inflections",
             "translations",
             "nuance",
             "synonyms",
+            "idioms",
             "warnings"
         ],
         "properties": {
@@ -1128,6 +1377,12 @@ fn gemini_lexi_result_schema() -> Value {
             "sourceLanguage": { "type": "STRING" },
             "resultLanguage": { "type": "STRING" },
             "headword": { "type": "STRING" },
+            "inflections": {
+                "type": "ARRAY",
+                "minItems": 0,
+                "maxItems": 3,
+                "items": gemini_inflection_schema()
+            },
             "translations": {
                 "type": "ARRAY",
                 "minItems": 1,
@@ -1153,6 +1408,12 @@ fn gemini_lexi_result_schema() -> Value {
                 "maxItems": 4,
                 "items": gemini_related_word_schema()
             },
+            "idioms": {
+                "type": "ARRAY",
+                "minItems": 0,
+                "maxItems": 3,
+                "items": gemini_idiom_schema()
+            },
             "warnings": { "type": "ARRAY", "items": { "type": "STRING" } }
         }
     })
@@ -1169,6 +1430,17 @@ fn gemini_example_sentence_schema() -> Value {
     })
 }
 
+fn gemini_inflection_schema() -> Value {
+    json!({
+        "type": "OBJECT",
+        "required": ["kind", "form"],
+        "properties": {
+            "kind": { "type": "STRING", "enum": ["plural", "past", "pastParticiple"] },
+            "form": { "type": "STRING" }
+        }
+    })
+}
+
 fn gemini_related_word_schema() -> Value {
     json!({
         "type": "OBJECT",
@@ -1181,6 +1453,18 @@ fn gemini_related_word_schema() -> Value {
     })
 }
 
+fn gemini_idiom_schema() -> Value {
+    json!({
+        "type": "OBJECT",
+        "required": ["idiom", "japanese", "example"],
+        "properties": {
+            "idiom": { "type": "STRING" },
+            "japanese": { "type": "STRING" },
+            "example": { "type": "STRING" }
+        }
+    })
+}
+
 fn partial_from_json_fragment(fragment: &str) -> LexiPartialResult {
     if let Ok(result) = serde_json::from_str::<LexiResultV1>(fragment) {
         return LexiPartialResult::from_result(&result);
@@ -1188,9 +1472,11 @@ fn partial_from_json_fragment(fragment: &str) -> LexiPartialResult {
 
     LexiPartialResult {
         headword: extract_string_field(fragment, "headword"),
+        inflections: extract_object_array::<Inflection>(fragment, "inflections"),
         translations: extract_object_array::<Translation>(fragment, "translations"),
         nuance: extract_string_field(fragment, "nuance"),
         synonyms: extract_object_array::<RelatedWord>(fragment, "synonyms"),
+        idioms: extract_object_array::<Idiom>(fragment, "idioms"),
         warnings: extract_string_array(fragment, "warnings"),
     }
 }
@@ -1392,12 +1678,25 @@ struct GeminiPart {
     text: String,
 }
 
+#[derive(Debug, Deserialize)]
+struct DeepLTranslateResponse {
+    translations: Vec<DeepLTranslation>,
+}
+
+#[derive(Debug, Deserialize)]
+struct DeepLTranslation {
+    text: String,
+    detected_source_language: Option<String>,
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
-        build_word_study_prompt, gemini_lexi_result_schema, lexi_result_schema, mock_headword,
-        parse_gemini_stream_text, parse_openai_stream_text, parse_sse_event_text, pop_sse_event,
+        build_word_study_prompt, classify_transform_mode, gemini_lexi_result_schema,
+        lexi_result_schema, mock_headword, mock_inflections, parse_gemini_stream_text,
+        parse_openai_stream_text, parse_sse_event_text, pop_sse_event,
         provider_finish_reason_indicates_truncation, selected_text_preview, sse_data_payload,
+        TransformMode,
     };
 
     #[test]
@@ -1480,6 +1779,12 @@ mod tests {
 
         assert_eq!(schema["properties"]["translations"]["minItems"], 1);
         assert_eq!(schema["properties"]["translations"]["maxItems"], 3);
+        assert_eq!(schema["properties"]["inflections"]["minItems"], 0);
+        assert_eq!(schema["properties"]["inflections"]["maxItems"], 3);
+        assert_eq!(
+            schema["$defs"]["inflection"]["properties"]["kind"]["enum"][0],
+            "plural"
+        );
         assert_eq!(
             schema["properties"]["translations"]["items"]["required"][2],
             "example"
@@ -1496,6 +1801,9 @@ mod tests {
         );
         assert_eq!(schema["properties"]["synonyms"]["minItems"], 0);
         assert_eq!(schema["properties"]["synonyms"]["maxItems"], 4);
+        assert_eq!(schema["properties"]["idioms"]["minItems"], 0);
+        assert_eq!(schema["properties"]["idioms"]["maxItems"], 3);
+        assert_eq!(schema["$defs"]["idiom"]["required"][0], "idiom");
         assert!(!schema["$defs"]["relatedWord"]["required"]
             .as_array()
             .expect("related word required")
@@ -1508,6 +1816,12 @@ mod tests {
 
         assert_eq!(schema["properties"]["translations"]["minItems"], 1);
         assert_eq!(schema["properties"]["translations"]["maxItems"], 3);
+        assert_eq!(schema["properties"]["inflections"]["minItems"], 0);
+        assert_eq!(schema["properties"]["inflections"]["maxItems"], 3);
+        assert_eq!(
+            schema["properties"]["inflections"]["items"]["properties"]["kind"]["enum"][0],
+            "plural"
+        );
         assert_eq!(
             schema["properties"]["translations"]["items"]["required"][2],
             "example"
@@ -1518,6 +1832,12 @@ mod tests {
         );
         assert_eq!(schema["properties"]["synonyms"]["minItems"], 0);
         assert_eq!(schema["properties"]["synonyms"]["maxItems"], 4);
+        assert_eq!(schema["properties"]["idioms"]["minItems"], 0);
+        assert_eq!(schema["properties"]["idioms"]["maxItems"], 3);
+        assert_eq!(
+            schema["properties"]["idioms"]["items"]["required"][0],
+            "idiom"
+        );
         assert!(!schema["properties"]["synonyms"]["items"]["required"]
             .as_array()
             .expect("related word required")
@@ -1535,6 +1855,8 @@ mod tests {
         assert!(prompt.contains("single inflected word"));
         assert!(prompt.contains("went -> go"));
         assert!(prompt.contains("dictionary/base form"));
+        assert!(prompt.contains("inflections: 0 to 3"));
+        assert!(prompt.contains("Regular forms must be omitted"));
         assert!(prompt.contains("part-of-speech label"));
         assert!(prompt.contains("数学"));
         assert!(prompt.contains("dictionary-style Japanese sense entries"));
@@ -1554,6 +1876,8 @@ mod tests {
         assert!(prompt.contains("接近する"));
         assert!(prompt.contains("Merge or delete overlapping Japanese meanings"));
         assert!(prompt.contains("example is required for every translation item"));
+        assert!(prompt.contains("idioms: 0 to 3"));
+        assert!(prompt.contains("Do not pad idioms"));
     }
 
     #[test]
@@ -1561,6 +1885,8 @@ mod tests {
         assert_eq!(mock_headword("went"), "go");
         assert_eq!(mock_headword("studied"), "study");
         assert_eq!(mock_headword("walked"), "walk");
+        assert!(mock_inflections("walked").is_empty());
+        assert_eq!(mock_inflections("went")[0].form, "went");
     }
 
     #[test]
@@ -1570,10 +1896,27 @@ mod tests {
     }
 
     #[test]
+    fn classifies_sentence_like_selection_for_text_translation() {
+        assert_eq!(
+            classify_transform_mode("This is a selected sentence."),
+            TransformMode::TextTranslation
+        );
+        assert_eq!(
+            classify_transform_mode("one two three four five"),
+            TransformMode::TextTranslation
+        );
+        assert_eq!(
+            classify_transform_mode("take off"),
+            TransformMode::WordStudy
+        );
+    }
+
+    #[test]
     fn started_event_serializes_selected_text_preview() {
         let value = serde_json::to_value(super::TransformEvent::Started {
             request_id: 7,
             selected_text_preview: "subtle".to_string(),
+            selected_text: None,
             shortcut: "Ctrl+Shift+X".to_string(),
             capture_method: "uia-foreground-window",
             source_process: Some("notepad.exe".to_string()),
