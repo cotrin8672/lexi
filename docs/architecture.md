@@ -71,6 +71,10 @@ Prefer a small command surface:
   - Starts a Google OAuth PKCE flow for Supabase Auth using a Rust-owned localhost callback listener at `http://localhost:38271/auth/callback`.
 - `sign_out_sync() -> ()`
   - Deletes the locally stored Supabase session.
+- `get_sync_status() -> SyncStatus`
+  - Returns compact vocabulary sync lifecycle state: pending mutation count, last server revision, last sync time, and the latest user-safe sync error when actionable.
+- `retry_sync() -> ()`
+  - Schedules a background push/pull cycle without blocking popup lookup.
 - `hide_main_window() -> ()`
   - Hides the popup to the tray for close-shortcut and close-button dismissal.
 - `copy_result(input: CopyRequest) -> CopyResult`
@@ -214,6 +218,16 @@ The write flow is:
 5. Let the server validate ownership, merge aliases, deduplicate canonical lexemes, write affected rows transactionally, and issue a server revision.
 6. Mark the local mutation acknowledged and store the returned server revision.
 7. Pull any later revisions and update the SQLite projection.
+
+Supabase remains the source of truth. SQLite holds optimistic local projection, read cache, and the durable mutation outbox until Supabase acknowledges each operation with a server revision.
+
+Phase 10 sync engine:
+
+- Rust module `sync` pushes pending `mutation_outbox` rows through Supabase RPC `apply_vocabulary_mutation`.
+- Pull uses Supabase RPC `pull_vocabulary_changes` keyed by monotonically increasing `server_revision`.
+- Background sync starts after app setup, successful Google sign-in, and local vocabulary saves.
+- The frontend listens for `lexi:sync-status` and shows compact sync notes only in settings or auth-adjacent surfaces.
+- Sync payloads exclude raw selected text, prompts, provider raw responses, and credentials.
 
 Reads should normally use SQLite. A stale cache should trigger background pull rather than blocking popup rendering. EJDict reference data is one-way source data: it can be bundled, downloaded, or mirrored into Supabase and then imported into SQLite, but user vocabulary writes must not mutate global dictionary rows.
 

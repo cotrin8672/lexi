@@ -45,7 +45,7 @@ struct SupabaseTokenResponse {
 }
 
 #[derive(Debug, Deserialize, Serialize)]
-struct SupabaseUser {
+pub(crate) struct SupabaseUser {
     id: String,
     email: Option<String>,
     #[serde(default)]
@@ -53,19 +53,19 @@ struct SupabaseUser {
 }
 
 #[derive(Debug, Default, Deserialize, Serialize)]
-struct SupabaseAppMetadata {
+pub(crate) struct SupabaseAppMetadata {
     #[serde(default)]
     admin: bool,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-struct StoredSupabaseSession {
-    access_token: String,
-    refresh_token: String,
-    token_type: String,
-    expires_at: Option<u64>,
-    user: SupabaseUser,
+pub(crate) struct StoredSupabaseSession {
+    pub access_token: String,
+    pub refresh_token: String,
+    pub token_type: String,
+    pub expires_at: Option<u64>,
+    pub user: SupabaseUser,
 }
 
 #[tauri::command]
@@ -124,6 +124,91 @@ pub fn sign_out_sync() -> Result<(), AppError> {
     secrets::delete_supabase_session()
 }
 
+pub fn current_user_id() -> Option<String> {
+    read_stored_session()
+        .ok()
+        .flatten()
+        .map(|session| session.user.id)
+}
+
+pub(crate) fn read_session() -> Result<Option<StoredSupabaseSession>, AppError> {
+    read_stored_session()
+}
+
+pub(crate) async fn refresh_session_if_needed(
+    supabase_url: &str,
+    supabase_anon_key: &str,
+    session: StoredSupabaseSession,
+) -> Result<StoredSupabaseSession, AppError> {
+    let needs_refresh = session
+        .expires_at
+        .map(|expires_at| now_unix_seconds().saturating_add(60) >= expires_at)
+        .unwrap_or(false);
+
+    if !needs_refresh {
+        return Ok(session);
+    }
+
+    let endpoint = format!("{supabase_url}/auth/v1/token?grant_type=refresh_token");
+    let response = reqwest::Client::new()
+        .post(endpoint)
+        .header("apikey", supabase_anon_key)
+        .header("Authorization", format!("Bearer {supabase_anon_key}"))
+        .json(&serde_json::json!({
+            "refresh_token": session.refresh_token,
+        }))
+        .send()
+        .await
+        .map_err(|error| {
+            AppError::new(
+                AppErrorCode::SyncAuthRequired,
+                "Supabase session refresh failed.",
+                format!("Supabase refresh request failed: {error}"),
+                true,
+            )
+        })?;
+
+    let status = response.status();
+    let body = response.text().await.map_err(|error| {
+        AppError::new(
+            AppErrorCode::SyncAuthRequired,
+            "Supabase session refresh failed.",
+            format!("Supabase refresh response read failed: {error}"),
+            true,
+        )
+    })?;
+
+    if !status.is_success() {
+        return Err(AppError::new(
+            AppErrorCode::SyncAuthRequired,
+            "Supabase session expired. Sign in again.",
+            supabase_auth_response_diagnostic("refresh endpoint", status, &body),
+            false,
+        ));
+    }
+
+    let token = serde_json::from_str::<SupabaseTokenResponse>(&body).map_err(|error| {
+        AppError::new(
+            AppErrorCode::SyncAuthRequired,
+            "Supabase session refresh failed.",
+            format!("Supabase refresh response parse failed: {error}"),
+            false,
+        )
+    })?;
+
+    let refreshed = StoredSupabaseSession {
+        access_token: token.access_token,
+        refresh_token: token.refresh_token,
+        token_type: token.token_type,
+        expires_at: token
+            .expires_in
+            .and_then(|seconds| now_unix_seconds().checked_add(seconds)),
+        user: token.user,
+    };
+    store_session(&refreshed)?;
+    Ok(refreshed)
+}
+
 fn start_callback_listener(
     app: AppHandle,
     callback_port: u16,
@@ -156,14 +241,17 @@ fn start_callback_listener(
                 let user_id = session.user.id.clone();
                 let admin = session.user.app_metadata.admin;
                 match store_session(&session) {
-                    Ok(()) => SyncAuthStatus {
-                        configured: true,
-                        signed_in: true,
-                        admin,
-                        user_id: Some(user_id),
-                        user_email: email,
-                        callback_url,
-                    },
+                    Ok(()) => {
+                        crate::sync::schedule_sync(app.clone());
+                        SyncAuthStatus {
+                            configured: true,
+                            signed_in: true,
+                            admin,
+                            user_id: Some(user_id),
+                            user_email: email,
+                            callback_url,
+                        }
+                    }
                     Err(error) => {
                         let _ = app.emit("lexi:sync-auth-error", error);
                         return;
@@ -280,7 +368,7 @@ async fn exchange_code_for_session(
         return Err(AppError::new(
             AppErrorCode::ProviderRequestFailed,
             "Google sign-in token exchange failed.",
-            format!("Supabase token endpoint returned {status}: {body}"),
+            supabase_auth_response_diagnostic("token endpoint", status, &body),
             false,
         ));
     }
@@ -508,6 +596,17 @@ fn now_unix_seconds() -> u64 {
         .duration_since(UNIX_EPOCH)
         .map(|duration| duration.as_secs())
         .unwrap_or(0)
+}
+
+fn supabase_auth_response_diagnostic(
+    endpoint_label: &str,
+    status: reqwest::StatusCode,
+    body: &str,
+) -> String {
+    format!(
+        "Supabase auth {endpoint_label} returned {status} with {} response bytes",
+        body.len()
+    )
 }
 
 #[cfg(test)]

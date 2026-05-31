@@ -2,10 +2,11 @@ pub mod errors;
 pub mod llm;
 pub mod schema;
 pub mod secrets;
-pub mod speech;
 pub mod selection;
 pub mod settings;
 pub mod shortcut;
+pub mod speech;
+pub mod sync;
 pub mod sync_auth;
 pub mod tray;
 pub mod vocabulary;
@@ -30,6 +31,7 @@ pub fn run() {
         .manage(llm::SelectedTextState::default())
         .manage(settings::SettingsState::default())
         .manage(shortcut::ShortcutRegistrationState::default())
+        .manage(sync::SyncRuntime::default())
         .plugin(tauri_plugin_opener::init())
         .invoke_handler(tauri::generate_handler![
             capture_selection_diagnostics,
@@ -42,6 +44,8 @@ pub fn run() {
             shortcut::get_shortcut_status,
             speech::speak_headword,
             speech::stop_headword_speech,
+            sync::get_sync_status,
+            sync::retry_sync,
             sync_auth::get_sync_auth_status,
             sync_auth::sign_out_sync,
             sync_auth::start_google_sign_in,
@@ -49,6 +53,7 @@ pub fn run() {
         .setup(|app| {
             shortcut::setup(app)?;
             tray::setup(app)?;
+            sync::setup(&app.handle());
             Ok(())
         })
         .on_window_event(|window, event| {

@@ -10,6 +10,9 @@ pub enum AppErrorCode {
     ProviderNotConfigured,
     ProviderRequestFailed,
     InvalidModelOutput,
+    SyncAuthRequired,
+    SyncPushFailed,
+    SyncPullFailed,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -205,11 +208,9 @@ mod tests {
 
         assert_eq!(error.code, AppErrorCode::ProviderNotConfigured);
         assert!(!error.retryable);
-        assert!(
-            error
-                .diagnostic_message
-                .contains("DeepL API key is not configured")
-        );
+        assert!(error
+            .diagnostic_message
+            .contains("DeepL API key is not configured"));
     }
 
     #[test]

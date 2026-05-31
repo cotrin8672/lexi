@@ -8,7 +8,7 @@ use crate::{
     },
     secrets,
     settings::{ProviderKind, SettingsState},
-    vocabulary,
+    sync, vocabulary,
 };
 use futures_util::StreamExt;
 use serde::{Deserialize, Serialize};
@@ -23,6 +23,18 @@ const REQUEST_TIMEOUT_MS: u64 = 60_000;
 const MAX_OUTPUT_TOKENS: u32 = 2048;
 const TRANSFORM_EVENT: &str = "lexi:transform";
 static NEXT_REQUEST_ID: AtomicU64 = AtomicU64::new(1);
+
+fn persist_word_study_result(
+    app: &AppHandle,
+    result: &LexiResultV1,
+    provider: ProviderKind,
+    model: &str,
+    selected_text: &str,
+) {
+    if vocabulary::save_word_study_result(app, result, provider, model, selected_text).is_ok() {
+        sync::schedule_sync(app.clone());
+    }
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum TransformMode {
@@ -503,7 +515,7 @@ async fn run_transform_stream_for_capture(
                 model: settings.model.clone(),
             },
         );
-        let _ = vocabulary::save_word_study_result(
+        persist_word_study_result(
             &app,
             &word_result,
             settings.provider,
@@ -542,7 +554,7 @@ async fn run_transform_stream_for_capture(
         },
     );
     let result = parse_lexi_result_v1(&raw_json)?;
-    let _ = vocabulary::save_word_study_result(
+    persist_word_study_result(
         &app,
         &result,
         settings.provider,
@@ -634,7 +646,7 @@ pub async fn run_transform(
     if settings.provider == ProviderKind::Mock {
         let result = MockProvider.transform(&request)?;
         if let LexiResult::WordStudy(word_result) = &result {
-            let _ = vocabulary::save_word_study_result(
+            persist_word_study_result(
                 &app,
                 word_result,
                 settings.provider,
@@ -665,7 +677,7 @@ pub async fn run_transform(
         ProviderKind::Mock => unreachable!("mock provider returned above"),
         ProviderKind::DeepL => unreachable!("DeepL text translation returned above"),
     };
-    let _ = vocabulary::save_word_study_result(
+    persist_word_study_result(
         &app,
         &result,
         settings.provider,
