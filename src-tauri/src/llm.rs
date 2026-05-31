@@ -1770,7 +1770,7 @@ mod tests {
     use super::{
         build_word_study_prompt, classify_transform_mode, gemini_lexi_result_schema,
         lexi_result_schema, mock_headword, mock_inflections, parse_gemini_stream_text,
-        parse_openai_stream_text, parse_sse_event_text, pop_sse_event,
+        parse_openai_stream_text, parse_sse_event_text, partial_from_json_fragment, pop_sse_event,
         provider_finish_reason_indicates_truncation, selected_text_preview, sse_data_payload,
         TransformMode,
     };
@@ -1985,6 +1985,45 @@ mod tests {
             classify_transform_mode("take off"),
             TransformMode::WordStudy
         );
+    }
+
+    #[test]
+    fn classifies_newline_and_clause_punctuation_for_text_translation() {
+        assert_eq!(
+            classify_transform_mode("line one\nline two"),
+            TransformMode::TextTranslation
+        );
+        assert_eq!(
+            classify_transform_mode("hello, world"),
+            TransformMode::TextTranslation
+        );
+        assert_eq!(
+            classify_transform_mode("one two three four"),
+            TransformMode::WordStudy
+        );
+        assert_eq!(classify_transform_mode("   "), TransformMode::WordStudy);
+    }
+
+    #[test]
+    fn partial_json_fragment_extracts_headword_before_completion() {
+        let partial = partial_from_json_fragment(
+            r#"{"schemaVersion":"lexi.result.v1","headword":"subtle","translations":[{"#,
+        );
+
+        assert_eq!(partial.headword.as_deref(), Some("subtle"));
+        assert!(partial.translations.is_empty());
+    }
+
+    #[test]
+    fn partial_json_fragment_extracts_completed_translation_rows() {
+        let partial = partial_from_json_fragment(
+            r#"{"headword":"go","translations":[{"text":"行く","note":"動詞","example":{"sentence":"I go.","japanese":"行く。"}}],"nuance":"#,
+        );
+
+        assert_eq!(partial.headword.as_deref(), Some("go"));
+        assert_eq!(partial.translations.len(), 1);
+        assert_eq!(partial.translations[0].text, "行く");
+        assert!(partial.nuance.is_none());
     }
 
     #[test]

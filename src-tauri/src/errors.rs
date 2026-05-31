@@ -113,14 +113,70 @@ mod tests {
     use super::{AppError, AppErrorCode};
     use crate::selection::SelectionCaptureError;
 
-    #[test]
-    fn maps_empty_selection_to_non_retryable_app_error() {
-        let error = AppError::from(SelectionCaptureError::EmptySelection);
-
-        assert_eq!(error.code, AppErrorCode::SelectionEmpty);
-        assert!(!error.retryable);
+    fn assert_selection_error(
+        source: SelectionCaptureError,
+        expected_code: AppErrorCode,
+        expected_retryable: bool,
+    ) {
+        let error = AppError::from(source);
+        assert_eq!(error.code, expected_code);
+        assert_eq!(error.retryable, expected_retryable);
         assert!(!error.user_message.is_empty());
         assert!(!error.diagnostic_message.is_empty());
+    }
+
+    #[test]
+    fn maps_empty_selection_to_non_retryable_app_error() {
+        assert_selection_error(
+            SelectionCaptureError::EmptySelection,
+            AppErrorCode::SelectionEmpty,
+            false,
+        );
+    }
+
+    #[test]
+    fn maps_access_denied_to_selection_permission_denied() {
+        assert_selection_error(
+            SelectionCaptureError::AccessDenied,
+            AppErrorCode::SelectionPermissionDenied,
+            false,
+        );
+    }
+
+    #[test]
+    fn maps_no_foreground_window_to_retryable_selection_unavailable() {
+        assert_selection_error(
+            SelectionCaptureError::NoForegroundWindow,
+            AppErrorCode::SelectionUnavailable,
+            true,
+        );
+    }
+
+    #[test]
+    fn maps_focused_element_unavailable_to_retryable_selection_unavailable() {
+        assert_selection_error(
+            SelectionCaptureError::FocusedElementUnavailable,
+            AppErrorCode::SelectionUnavailable,
+            true,
+        );
+    }
+
+    #[test]
+    fn maps_text_pattern_unavailable_to_non_retryable_selection_unavailable() {
+        assert_selection_error(
+            SelectionCaptureError::TextPatternUnavailable,
+            AppErrorCode::SelectionUnavailable,
+            false,
+        );
+    }
+
+    #[test]
+    fn maps_selection_unsupported_to_non_retryable_selection_unavailable() {
+        assert_selection_error(
+            SelectionCaptureError::SelectionUnsupported,
+            AppErrorCode::SelectionUnavailable,
+            false,
+        );
     }
 
     #[test]
@@ -141,5 +197,40 @@ mod tests {
         assert_eq!(error.code, AppErrorCode::InvalidModelOutput);
         assert!(error.retryable);
         assert_eq!(error.diagnostic_message, "missing title");
+    }
+
+    #[test]
+    fn provider_not_configured_is_not_retryable() {
+        let error = AppError::provider_not_configured("DeepL API key is not configured");
+
+        assert_eq!(error.code, AppErrorCode::ProviderNotConfigured);
+        assert!(!error.retryable);
+        assert!(
+            error
+                .diagnostic_message
+                .contains("DeepL API key is not configured")
+        );
+    }
+
+    #[test]
+    fn provider_request_failed_respects_retryable_flag() {
+        let retryable = AppError::provider_request_failed("network timeout", true);
+        let permanent = AppError::provider_request_failed("invalid api key", false);
+
+        assert_eq!(retryable.code, AppErrorCode::ProviderRequestFailed);
+        assert!(retryable.retryable);
+        assert_eq!(permanent.code, AppErrorCode::ProviderRequestFailed);
+        assert!(!permanent.retryable);
+    }
+
+    #[test]
+    fn serializes_app_error_with_frontend_field_names() {
+        let error = AppError::from(SelectionCaptureError::EmptySelection);
+        let value = serde_json::to_value(&error).expect("app error should serialize");
+
+        assert_eq!(value["code"], "SelectionEmpty");
+        assert_eq!(value["retryable"], false);
+        assert!(value.get("userMessage").is_some());
+        assert!(value.get("diagnosticMessage").is_some());
     }
 }

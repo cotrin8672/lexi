@@ -623,9 +623,8 @@ mod tests {
         assert!(error.diagnostic_message.contains("usageComparison"));
     }
 
-    #[test]
-    fn accepts_valid_text_translation_result() {
-        let result = TextTranslationResultV1 {
+    fn valid_text_translation() -> TextTranslationResultV1 {
+        TextTranslationResultV1 {
             schema_version: LEXI_TEXT_TRANSLATION_V1_SCHEMA_VERSION.to_string(),
             mode: "text-translation".to_string(),
             source_language: "auto".to_string(),
@@ -638,9 +637,152 @@ mod tests {
             }],
             warnings: vec![],
         }
-        .validate()
-        .expect("valid text translation");
+    }
+
+    #[test]
+    fn accepts_valid_text_translation_result() {
+        let result = valid_text_translation()
+            .validate()
+            .expect("valid text translation");
 
         assert_eq!(result.mode, "text-translation");
+    }
+
+    #[test]
+    fn accepts_null_translation_note() {
+        let mut result = valid_result();
+        result.translations[0].note = None;
+
+        result.validate().expect("null note is allowed");
+    }
+
+    #[test]
+    fn rejects_too_many_translations() {
+        let mut result = valid_result();
+        result.translations = vec![
+            result.translations[0].clone(),
+            result.translations[0].clone(),
+            result.translations[0].clone(),
+            result.translations[0].clone(),
+        ];
+
+        let error = result
+            .validate()
+            .expect_err("more than three translations should fail");
+
+        assert_eq!(error.code, AppErrorCode::InvalidModelOutput);
+        assert!(error.diagnostic_message.contains("translations"));
+    }
+
+    #[test]
+    fn rejects_overlong_headword() {
+        let mut result = valid_result();
+        result.headword = "a".repeat(49);
+
+        let error = result.validate().expect_err("overlong headword should fail");
+
+        assert_eq!(error.code, AppErrorCode::InvalidModelOutput);
+        assert!(error.diagnostic_message.contains("headword"));
+    }
+
+    #[test]
+    fn rejects_malformed_json() {
+        let error = parse_lexi_result_v1("{not json").expect_err("malformed json should fail");
+
+        assert_eq!(error.code, AppErrorCode::InvalidModelOutput);
+        assert!(error.diagnostic_message.contains("JSON parse failed"));
+    }
+
+    #[test]
+    fn rejects_unknown_text_translation_schema_version() {
+        let mut result = valid_text_translation();
+        result.schema_version = "lexi.text-translation.v2".to_string();
+
+        let error = result
+            .validate()
+            .expect_err("unknown text translation schema should fail");
+
+        assert_eq!(error.code, AppErrorCode::InvalidModelOutput);
+        assert!(error
+            .diagnostic_message
+            .contains("unsupported schemaVersion"));
+    }
+
+    #[test]
+    fn rejects_empty_translated_text() {
+        let mut result = valid_text_translation();
+        result.translated_text = "   ".to_string();
+
+        let error = result
+            .validate()
+            .expect_err("empty translated text should fail");
+
+        assert_eq!(error.code, AppErrorCode::InvalidModelOutput);
+        assert!(error.diagnostic_message.contains("translatedText"));
+    }
+
+    #[test]
+    fn rejects_overlong_translated_text() {
+        let mut result = valid_text_translation();
+        result.translated_text = "あ".repeat(4001);
+
+        let error = result
+            .validate()
+            .expect_err("overlong translated text should fail");
+
+        assert_eq!(error.code, AppErrorCode::InvalidModelOutput);
+        assert!(error.diagnostic_message.contains("translatedText"));
+    }
+
+    #[test]
+    fn rejects_too_many_segments() {
+        let mut result = valid_text_translation();
+        result.segments = (0..25)
+            .map(|index| TranslationSegment {
+                source: format!("source {index}"),
+                translation: format!("translation {index}"),
+            })
+            .collect();
+
+        let error = result
+            .validate()
+            .expect_err("more than 24 segments should fail");
+
+        assert_eq!(error.code, AppErrorCode::InvalidModelOutput);
+        assert!(error.diagnostic_message.contains("segments"));
+    }
+
+    #[test]
+    fn accepts_empty_segments_array() {
+        let mut result = valid_text_translation();
+        result.segments = vec![];
+
+        result
+            .validate()
+            .expect("empty segments are currently accepted");
+    }
+
+    #[test]
+    fn rejects_empty_segment_source() {
+        let mut result = valid_text_translation();
+        result.segments[0].source = " ".to_string();
+
+        let error = result
+            .validate()
+            .expect_err("empty segment source should fail");
+
+        assert_eq!(error.code, AppErrorCode::InvalidModelOutput);
+        assert!(error.diagnostic_message.contains("segments[0].source"));
+    }
+
+    #[test]
+    fn rejects_unsupported_text_translation_mode() {
+        let mut result = valid_text_translation();
+        result.mode = "word-study".to_string();
+
+        let error = result.validate().expect_err("wrong mode should fail");
+
+        assert_eq!(error.code, AppErrorCode::InvalidModelOutput);
+        assert!(error.diagnostic_message.contains("unsupported mode"));
     }
 }

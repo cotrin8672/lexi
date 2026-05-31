@@ -11,7 +11,12 @@ import {
   type LexiResultV1,
   type TextTranslationResultV1,
 } from "./lib/schema";
-import App, { PopupView, type PopupState } from "./App";
+import App, {
+  PopupView,
+  type PopupState,
+  type ProviderSettings,
+} from "./App";
+import { SettingsView } from "./SettingsApp";
 
 const noop = () => undefined;
 const tauriMocks = vi.hoisted(() => ({
@@ -44,6 +49,7 @@ vi.mock("@tauri-apps/api/window", () => ({
     }
   },
   getCurrentWindow: () => ({
+    label: "main",
     hide: tauriMocks.hide,
     setMinSize: tauriMocks.setMinSize,
     setSize: tauriMocks.setSize,
@@ -87,7 +93,6 @@ function renderPopup(
     () => (
       <PopupView
         state={state}
-        settingsOpen={false}
         providerSettings={null}
         syncAuthStatus={{
           configured: true,
@@ -100,10 +105,58 @@ function renderPopup(
         themeMode="light"
         onClose={noop}
         onRetry={noop}
-        onToggleSettings={noop}
-        onToggleTheme={noop}
-        onSaveSettings={async () => undefined}
         onSetResultTab={noop}
+      />
+    ),
+    root,
+  );
+  return root;
+}
+
+function defaultProviderSettings(
+  overrides: Partial<ProviderSettings> = {},
+): ProviderSettings {
+  return {
+    shortcut: "Ctrl+Shift+X",
+    backgroundOpacity: 0.94,
+    theme: "light",
+    provider: "gemini",
+    model: "gemini-2.5-flash-lite",
+    resultLanguage: "ja",
+    promptMode: "word-study",
+    apiKeyConfigured: false,
+    deeplApiKeyConfigured: false,
+    ...overrides,
+  };
+}
+
+function renderSettingsView(
+  overrides: Partial<ProviderSettings> = {},
+  options: {
+    themeMode?: "light" | "dark";
+    backgroundOpacity?: number | (() => number);
+    onSave?: (update: unknown) => Promise<void>;
+    onToggleTheme?: () => void;
+    onSetBackgroundOpacity?: (opacity: number) => void;
+  } = {},
+) {
+  const settings = defaultProviderSettings(overrides);
+  const root = document.createElement("div");
+  document.body.appendChild(root);
+  render(
+    () => (
+      <SettingsView
+        settings={settings}
+        syncAuthStatus={null}
+        themeMode={options.themeMode ?? "light"}
+        backgroundOpacity={
+          typeof options.backgroundOpacity === "function"
+            ? options.backgroundOpacity()
+            : (options.backgroundOpacity ?? settings.backgroundOpacity)
+        }
+        onSave={options.onSave ?? (async () => undefined)}
+        onToggleTheme={options.onToggleTheme ?? noop}
+        onSetBackgroundOpacity={options.onSetBackgroundOpacity ?? noop}
       />
     ),
     root,
@@ -503,15 +556,11 @@ describe("PopupView", () => {
       () => (
         <PopupView
           state={state()}
-          settingsOpen={false}
           providerSettings={null}
           activeResultTab="meaning"
           themeMode="light"
           onClose={noop}
           onRetry={noop}
-          onToggleSettings={noop}
-          onToggleTheme={noop}
-          onSaveSettings={async () => undefined}
           onSetResultTab={noop}
         />
       ),
@@ -556,15 +605,11 @@ describe("PopupView", () => {
       () => (
         <PopupView
           state={state()}
-          settingsOpen={false}
           providerSettings={null}
           activeResultTab="meaning"
           themeMode="light"
           onClose={noop}
           onRetry={noop}
-          onToggleSettings={noop}
-          onToggleTheme={noop}
-          onSaveSettings={async () => undefined}
           onSetResultTab={noop}
         />
       ),
@@ -589,6 +634,69 @@ describe("PopupView", () => {
     expect(root.textContent).toContain("slight");
     expect(root.textContent).toContain("second comparison");
     expect(root.textContent).not.toContain("delicate");
+  });
+
+  it("hides retry for non-retryable errors", () => {
+    const state: PopupState = {
+      kind: "error",
+      shortcut: "Ctrl+Shift+X",
+      error: {
+        code: "SelectionEmpty",
+        userMessage: "Select text before running Lexi.",
+        diagnosticMessage: "No selected text was available from the active control.",
+        retryable: false,
+      },
+      context: {
+        selectionErrorCode: "SelectionEmpty",
+        captureMethod: null,
+        sourceProcess: null,
+        sourceWindowTitle: null,
+        retryCapture: null,
+      },
+    };
+
+    const root = renderPopup(state);
+
+    expect(root.textContent).toContain("Select text before running Lexi.");
+    expect(root.querySelector(".error-actions button")?.textContent).toBe("Close");
+  });
+
+  it("renders streaming dictionary content during validating phase", () => {
+    const state: PopupState = {
+      kind: "streaming",
+      shortcut: "Ctrl+Shift+X",
+      requestId: 9,
+      mode: "word-study",
+      sourceText: null,
+      phase: "validating",
+      capture: readyCapture(),
+      partial: {
+        headword: "subtle",
+        inflections: [],
+        translations: [
+          {
+            text: "delicate",
+            note: TRANSLATION_NOTE_VALUES[2],
+            example: {
+              sentence: "A subtle scent.",
+              japanese: "かすかな香り。",
+            },
+          },
+        ],
+        nuance: "Understated rather than obvious.",
+        synonyms: [],
+        idioms: [],
+        warnings: [],
+      },
+    };
+
+    const root = renderPopup(state);
+
+    expect(root.textContent).toContain("subtle");
+    expect(root.textContent).toContain("delicate");
+    expect(root.querySelector(".dictionary-layout.streaming")).toBeInstanceOf(
+      HTMLElement,
+    );
   });
 
   it("renders user-safe errors and diagnostics", () => {
@@ -624,7 +732,7 @@ describe("PopupView", () => {
     );
   });
 
-  it("opens provider settings from the header gear", () => {
+  it("renders the settings window", () => {
     vi.mocked(invoke).mockResolvedValueOnce({
       provider: "gemini",
       models: [
@@ -633,40 +741,17 @@ describe("PopupView", () => {
       fetched: false,
       warning: "API key is not configured; showing default models.",
     });
-    const onSaveSettings = vi.fn(async () => undefined);
+    const onSave = vi.fn(async () => undefined);
     const onToggleTheme = vi.fn();
     const onSetBackgroundOpacity = vi.fn();
-    const root = document.createElement("div");
-    document.body.appendChild(root);
-
-    render(
-      () => (
-        <PopupView
-          state={readyState()}
-          settingsOpen
-          providerSettings={{
-            shortcut: "Ctrl+Shift+X",
-            backgroundOpacity: 0.3,
-            provider: "gemini",
-            model: "gemini-2.5-flash-lite",
-            resultLanguage: "ja",
-            promptMode: "word-study",
-            apiKeyConfigured: false,
-            deeplApiKeyConfigured: false,
-          }}
-          activeResultTab="meaning"
-          themeMode="light"
-          backgroundOpacity={0.3}
-          onClose={noop}
-          onRetry={noop}
-          onToggleSettings={noop}
-          onToggleTheme={onToggleTheme}
-          onSetBackgroundOpacity={onSetBackgroundOpacity}
-          onSaveSettings={onSaveSettings}
-          onSetResultTab={noop}
-        />
-      ),
-      root,
+    const root = renderSettingsView(
+      { backgroundOpacity: 0.3, apiKeyConfigured: false },
+      {
+        backgroundOpacity: 0.3,
+        onSave,
+        onToggleTheme,
+        onSetBackgroundOpacity,
+      },
     );
 
     expect(root.textContent).toContain("Word provider");
@@ -724,36 +809,10 @@ describe("PopupView", () => {
       fetched: true,
       warning: null,
     });
-    const onSaveSettings = vi.fn(async () => undefined);
-    const root = document.createElement("div");
-    document.body.appendChild(root);
-
-    render(
-      () => (
-        <PopupView
-          state={readyState()}
-          settingsOpen
-          providerSettings={{
-            shortcut: "Ctrl+Shift+X",
-            backgroundOpacity: 0.94,
-            provider: "gemini",
-            model: "gemini-2.5-flash-lite",
-            resultLanguage: "ja",
-            promptMode: "word-study",
-            apiKeyConfigured: true,
-            deeplApiKeyConfigured: false,
-          }}
-          activeResultTab="meaning"
-          themeMode="light"
-          onClose={noop}
-          onRetry={noop}
-          onToggleSettings={noop}
-          onToggleTheme={noop}
-          onSaveSettings={onSaveSettings}
-          onSetResultTab={noop}
-        />
-      ),
-      root,
+    const onSave = vi.fn(async () => undefined);
+    const root = renderSettingsView(
+      { apiKeyConfigured: true, deeplApiKeyConfigured: false },
+      { onSave },
     );
 
     const deeplInput = Array.from(root.querySelectorAll("input")).find(
@@ -768,10 +827,11 @@ describe("PopupView", () => {
       ?.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true }));
     await Promise.resolve();
 
-    expect(onSaveSettings).toHaveBeenCalledWith({
+    expect(onSave).toHaveBeenCalledWith({
       shortcut: "Ctrl+Shift+X",
       closeShortcut: "Escape",
       backgroundOpacity: 0.94,
+      theme: "light",
       provider: "gemini",
       model: "gemini-2.5-flash-lite",
       resultLanguage: "ja",
@@ -790,36 +850,10 @@ describe("PopupView", () => {
       fetched: true,
       warning: null,
     });
-    const onSaveSettings = vi.fn(async () => undefined);
-    const root = document.createElement("div");
-    document.body.appendChild(root);
-
-    render(
-      () => (
-        <PopupView
-          state={readyState()}
-          settingsOpen
-          providerSettings={{
-            shortcut: "Ctrl+Shift+X",
-            backgroundOpacity: 0.94,
-            provider: "gemini",
-            model: "gemini-2.5-flash-lite",
-            resultLanguage: "ja",
-            promptMode: "word-study",
-            apiKeyConfigured: true,
-            deeplApiKeyConfigured: false,
-          }}
-          activeResultTab="meaning"
-          themeMode="light"
-          onClose={noop}
-          onRetry={noop}
-          onToggleSettings={noop}
-          onToggleTheme={noop}
-          onSaveSettings={onSaveSettings}
-          onSetResultTab={noop}
-        />
-      ),
-      root,
+    const onSave = vi.fn(async () => undefined);
+    const root = renderSettingsView(
+      { apiKeyConfigured: true, deeplApiKeyConfigured: false },
+      { onSave },
     );
 
     const shortcutButton = root.querySelector(".shortcut-recorder");
@@ -847,10 +881,11 @@ describe("PopupView", () => {
       ?.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true }));
     await Promise.resolve();
 
-    expect(onSaveSettings).toHaveBeenCalledWith({
+    expect(onSave).toHaveBeenCalledWith({
       shortcut: "Ctrl+Shift+(",
       closeShortcut: "Escape",
       backgroundOpacity: 0.94,
+      theme: "light",
       provider: "gemini",
       model: "gemini-2.5-flash-lite",
       resultLanguage: "ja",
@@ -869,37 +904,14 @@ describe("PopupView", () => {
       fetched: true,
       warning: null,
     });
-    const onSaveSettings = vi.fn(async () => undefined);
-    const root = document.createElement("div");
-    document.body.appendChild(root);
-
-    render(
-      () => (
-        <PopupView
-          state={readyState()}
-          settingsOpen
-          providerSettings={{
-            shortcut: "Ctrl+Shift+X",
-            closeShortcut: "Escape",
-            backgroundOpacity: 0.94,
-            provider: "gemini",
-            model: "gemini-2.5-flash-lite",
-            resultLanguage: "ja",
-            promptMode: "word-study",
-            apiKeyConfigured: true,
-            deeplApiKeyConfigured: false,
-          }}
-          activeResultTab="meaning"
-          themeMode="light"
-          onClose={noop}
-          onRetry={noop}
-          onToggleSettings={noop}
-          onToggleTheme={noop}
-          onSaveSettings={onSaveSettings}
-          onSetResultTab={noop}
-        />
-      ),
-      root,
+    const onSave = vi.fn(async () => undefined);
+    const root = renderSettingsView(
+      {
+        closeShortcut: "Escape",
+        apiKeyConfigured: true,
+        deeplApiKeyConfigured: false,
+      },
+      { onSave },
     );
 
     const shortcutButtons = root.querySelectorAll(".shortcut-recorder");
@@ -915,10 +927,11 @@ describe("PopupView", () => {
       ?.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true }));
     await Promise.resolve();
 
-    expect(onSaveSettings).toHaveBeenCalledWith({
+    expect(onSave).toHaveBeenCalledWith({
       shortcut: "Ctrl+Shift+X",
       closeShortcut: "F9",
       backgroundOpacity: 0.94,
+      theme: "light",
       provider: "gemini",
       model: "gemini-2.5-flash-lite",
       resultLanguage: "ja",
@@ -938,38 +951,14 @@ describe("PopupView", () => {
       warning: null,
     });
     const [backgroundOpacity, setBackgroundOpacity] = createSignal(0.94);
-    const onSaveSettings = vi.fn(async () => undefined);
-    const root = document.createElement("div");
-    document.body.appendChild(root);
-
-    render(
-      () => (
-        <PopupView
-          state={readyState()}
-          settingsOpen
-          providerSettings={{
-            shortcut: "Ctrl+Shift+X",
-            backgroundOpacity: 0.94,
-            provider: "gemini",
-            model: "gemini-2.5-flash-lite",
-            resultLanguage: "ja",
-            promptMode: "word-study",
-            apiKeyConfigured: true,
-            deeplApiKeyConfigured: false,
-          }}
-          activeResultTab="meaning"
-          themeMode="light"
-          backgroundOpacity={backgroundOpacity()}
-          onClose={noop}
-          onRetry={noop}
-          onToggleSettings={noop}
-          onToggleTheme={noop}
-          onSetBackgroundOpacity={setBackgroundOpacity}
-          onSaveSettings={onSaveSettings}
-          onSetResultTab={noop}
-        />
-      ),
-      root,
+    const onSave = vi.fn(async () => undefined);
+    const root = renderSettingsView(
+      { apiKeyConfigured: true, deeplApiKeyConfigured: false },
+      {
+        backgroundOpacity: () => backgroundOpacity(),
+        onSetBackgroundOpacity: setBackgroundOpacity,
+        onSave,
+      },
     );
 
     const opacityInput = root.querySelector(
@@ -984,10 +973,11 @@ describe("PopupView", () => {
       ?.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true }));
     await Promise.resolve();
 
-    expect(onSaveSettings).toHaveBeenCalledWith({
+    expect(onSave).toHaveBeenCalledWith({
       shortcut: "Ctrl+Shift+X",
       closeShortcut: "Escape",
       backgroundOpacity: 0.6,
+      theme: "light",
       provider: "gemini",
       model: "gemini-2.5-flash-lite",
       resultLanguage: "ja",
@@ -1009,36 +999,10 @@ describe("PopupView", () => {
       fetched: true,
       warning: null,
     });
-    const onSaveSettings = vi.fn(async () => undefined);
-    const root = document.createElement("div");
-    document.body.appendChild(root);
-
-    render(
-      () => (
-        <PopupView
-          state={readyState()}
-          settingsOpen
-          providerSettings={{
-            shortcut: "Ctrl+Shift+X",
-            backgroundOpacity: 0.94,
-            provider: "gemini",
-            model: "gemini-2.5-flash-lite",
-            resultLanguage: "ja",
-            promptMode: "word-study",
-            apiKeyConfigured: true,
-            deeplApiKeyConfigured: false,
-          }}
-          activeResultTab="meaning"
-          themeMode="light"
-          onClose={noop}
-          onRetry={noop}
-          onToggleSettings={noop}
-          onToggleTheme={noop}
-          onSaveSettings={onSaveSettings}
-          onSetResultTab={noop}
-        />
-      ),
-      root,
+    const onSave = vi.fn(async () => undefined);
+    const root = renderSettingsView(
+      { apiKeyConfigured: true, deeplApiKeyConfigured: false },
+      { onSave },
     );
 
     await Promise.resolve();
@@ -1060,10 +1024,11 @@ describe("PopupView", () => {
       ?.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true }));
     await Promise.resolve();
 
-    expect(onSaveSettings).toHaveBeenCalledWith({
+    expect(onSave).toHaveBeenCalledWith({
       shortcut: "Ctrl+Shift+X",
       closeShortcut: "Escape",
       backgroundOpacity: 0.94,
+      theme: "light",
       provider: "gemini",
       model: "gemini-2.5-flash",
       resultLanguage: "ja",
@@ -1164,6 +1129,7 @@ describe("App stream flow", () => {
         return Promise.resolve({
           shortcut: "Ctrl+Shift+X",
           backgroundOpacity: 0.94,
+          theme: "light",
           provider: "gemini",
           model: "gemini-2.5-flash-lite",
           resultLanguage: "ja",
@@ -1207,6 +1173,7 @@ describe("App stream flow", () => {
         return Promise.resolve({
           shortcut: "Ctrl+Shift+X",
           backgroundOpacity: 0.94,
+          theme: "light",
           provider: "gemini",
           model: "gemini-2.5-flash-lite",
           resultLanguage: "ja",
@@ -1265,12 +1232,13 @@ describe("App stream flow", () => {
         return Promise.resolve({
           shortcut: "Ctrl+Shift+X",
           backgroundOpacity: 0.72,
+          theme: "light",
           provider: "gemini",
           model: "gemini-2.5-flash-lite",
           resultLanguage: "ja",
           promptMode: "word-study",
           apiKeyConfigured: true,
-            deeplApiKeyConfigured: false,
+          deeplApiKeyConfigured: false,
         });
       }
       if (command === "get_shortcut_status") {
@@ -1347,6 +1315,102 @@ describe("App stream flow", () => {
       },
     });
     expect(invoke).not.toHaveBeenCalledWith("run_transform");
+
+    root.remove();
+  });
+
+  it("ignores transform events for stale request ids", async () => {
+    vi.mocked(invoke).mockImplementation((command) => {
+      if (command === "get_provider_settings") {
+        return Promise.resolve({
+          shortcut: "Ctrl+Shift+X",
+          backgroundOpacity: 0.72,
+          theme: "light",
+          provider: "gemini",
+          model: "gemini-2.5-flash-lite",
+          resultLanguage: "ja",
+          promptMode: "word-study",
+          apiKeyConfigured: true,
+          deeplApiKeyConfigured: false,
+          supabaseAnonKeyConfigured: true,
+          supabaseCallbackUrl: "http://localhost:38271/auth/callback",
+        });
+      }
+      if (command === "get_shortcut_status") {
+        return Promise.resolve({
+          shortcut: "Ctrl+Shift+X",
+          registered: true,
+          registrationError: null,
+        });
+      }
+      if (command === "get_sync_auth_status") {
+        return Promise.resolve({
+          configured: true,
+          signedIn: true,
+          userId: "user-1",
+          userEmail: "lexi@example.com",
+          callbackUrl: "http://localhost:38271/auth/callback",
+        });
+      }
+
+      return Promise.reject(new Error(`unexpected command ${command}`));
+    });
+
+    const root = document.createElement("div");
+    document.body.appendChild(root);
+    render(() => <App />, root);
+    await Promise.resolve();
+    await Promise.resolve();
+
+    const emit = tauriMocks.listeners["lexi:transform"][0];
+    emit({
+      payload: {
+        status: "started",
+        requestId: 1,
+        selectedTextPreview: "first",
+        shortcut: "Ctrl+Shift+X",
+        captureMethod: "uia-foreground-window",
+        sourceProcess: "notepad.exe",
+        sourceWindowTitle: "first.txt",
+        characterCount: 5,
+        multiline: false,
+        provider: "gemini",
+        model: "gemini-2.5-flash-lite",
+      },
+    });
+    emit({
+      payload: {
+        status: "started",
+        requestId: 2,
+        selectedTextPreview: "second",
+        shortcut: "Ctrl+Shift+X",
+        captureMethod: "uia-foreground-window",
+        sourceProcess: "notepad.exe",
+        sourceWindowTitle: "second.txt",
+        characterCount: 6,
+        multiline: false,
+        provider: "gemini",
+        model: "gemini-2.5-flash-lite",
+      },
+    });
+    await Promise.resolve();
+
+    expect(root.textContent).toContain("second");
+    expect(root.textContent).not.toContain("first");
+
+    emit({
+      payload: {
+        status: "ready",
+        requestId: 1,
+        result: mockResult(),
+        provider: "gemini",
+        model: "gemini-2.5-flash-lite",
+      },
+    });
+    await Promise.resolve();
+
+    expect(root.textContent).toContain("second");
+    expect(root.textContent).not.toContain("subtle");
 
     root.remove();
   });

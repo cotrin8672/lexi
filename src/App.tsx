@@ -69,14 +69,15 @@ type PopupErrorContext = {
 };
 
 type ResultTab = "meaning" | "related";
-type ThemeMode = "light" | "dark";
+export type ThemeMode = "light" | "dark";
 type ProviderKind = "mock" | "gemini" | "open-ai" | "deep-l";
 type ResultMode = "word-study" | "text-translation";
 
-type ProviderSettings = {
+export type ProviderSettings = {
   shortcut: string;
   closeShortcut?: string;
   backgroundOpacity: number;
+  theme: ThemeMode;
   provider: ProviderKind;
   model: string;
   resultLanguage: string;
@@ -87,10 +88,11 @@ type ProviderSettings = {
   supabaseCallbackUrl?: string;
 };
 
-type ProviderSettingsUpdate = {
+export type ProviderSettingsUpdate = {
   shortcut: string;
   closeShortcut: string;
   backgroundOpacity: number;
+  theme: ThemeMode;
   provider: ProviderKind;
   model: string;
   resultLanguage: string;
@@ -101,12 +103,17 @@ type ProviderSettingsUpdate = {
   supabaseAnonKey?: string | null;
 };
 
-type SyncAuthStatus = {
+export type SyncAuthStatus = {
   configured: boolean;
   signedIn: boolean;
   userId: string | null;
   userEmail: string | null;
   callbackUrl: string;
+};
+
+export type SettingsUpdatedEvent = {
+  settings: ProviderSettings;
+  themeMode: ThemeMode;
 };
 
 type GoogleSignInStart = {
@@ -231,7 +238,6 @@ function App() {
     kind: "idle",
     shortcut: "Ctrl+Shift+X",
   });
-  const [settingsOpen, setSettingsOpen] = createSignal(false);
   const [providerSettings, setProviderSettings] =
     createSignal<ProviderSettings | null>(null);
   const [syncAuthStatus, setSyncAuthStatus] =
@@ -247,7 +253,6 @@ function App() {
   let windowMode: "auth" | "popup" | null = null;
 
   async function startTransform(shortcut: string, capture: CaptureMetadata) {
-    setSettingsOpen(false);
     setActiveResultTab("meaning");
     setState({ kind: "requesting", shortcut, capture });
 
@@ -313,25 +318,9 @@ function App() {
     }
   }
 
-  async function saveProviderSettings(update: ProviderSettingsUpdate) {
-    const saved = await invoke<ProviderSettings>("update_provider_settings", {
-      update,
-    });
-    setProviderSettings(saved);
-    setBackgroundOpacity(saved.backgroundOpacity);
-    setState((current) => ({ ...current, shortcut: saved.shortcut }));
-    return saved;
-  }
-
   async function startGoogleSignIn() {
     const started = await invoke<GoogleSignInStart>("start_google_sign_in");
     await openUrl(started.authUrl);
-  }
-
-  async function signOutSync() {
-    await invoke("sign_out_sync");
-    const status = await invoke<SyncAuthStatus>("get_sync_auth_status");
-    setSyncAuthStatus(status);
   }
 
   async function applyWindowMode(requiredAuth: boolean) {
@@ -358,10 +347,12 @@ function App() {
   onMount(() => {
     let cleanupCapture: (() => void) | undefined;
     let cleanupTransform: (() => void) | undefined;
+    let cleanupSettings: (() => void) | undefined;
 
     void invoke<ProviderSettings>("get_provider_settings").then((settings) => {
       setProviderSettings(settings);
       setBackgroundOpacity(settings.backgroundOpacity);
+      setThemeMode(settings.theme);
     });
 
     void invoke<SyncAuthStatus>("get_sync_auth_status").then(setSyncAuthStatus);
@@ -386,15 +377,10 @@ function App() {
       setState({ kind: "idle", shortcut: status.shortcut });
     });
 
-    if (window.matchMedia?.("(prefers-color-scheme: dark)").matches) {
-      setThemeMode("dark");
-    }
-
     void listen<CaptureEvent>("lexi:capture", (event) => {
       const payload = event.payload;
 
       if (payload.status === "capturing") {
-        setSettingsOpen(false);
         setState({ kind: "capturing", shortcut: payload.shortcut });
         return;
       }
@@ -415,7 +401,6 @@ function App() {
       }
 
       activeRequestId = null;
-      setSettingsOpen(false);
       setState({
         kind: "error",
         shortcut: payload.shortcut,
@@ -437,7 +422,6 @@ function App() {
 
       if (payload.status === "started") {
         activeRequestId = payload.requestId;
-        setSettingsOpen(false);
         setActiveResultTab("meaning");
         setState({
           kind: "streaming",
@@ -533,6 +517,18 @@ function App() {
       setSyncAuthStatus(event.payload);
     });
 
+    void listen<SettingsUpdatedEvent>("lexi:settings-updated", (event) => {
+      setProviderSettings(event.payload.settings);
+      setBackgroundOpacity(event.payload.settings.backgroundOpacity);
+      setThemeMode(event.payload.themeMode);
+      setState((current) => ({
+        ...current,
+        shortcut: event.payload.settings.shortcut,
+      }));
+    }).then((unlisten) => {
+      cleanupSettings = unlisten;
+    });
+
     const keyHandler = (event: KeyboardEvent) => {
       if (event.defaultPrevented) {
         return;
@@ -570,6 +566,7 @@ function App() {
     onCleanup(() => {
       cleanupCapture?.();
       cleanupTransform?.();
+      cleanupSettings?.();
       window.removeEventListener("keydown", keyHandler, { capture: true });
     });
   });
@@ -581,7 +578,6 @@ function App() {
   return (
     <PopupView
       state={state()}
-      settingsOpen={settingsOpen()}
       providerSettings={providerSettings()}
       syncAuthStatus={syncAuthStatus()}
       activeResultTab={activeResultTab()}
@@ -589,17 +585,7 @@ function App() {
       backgroundOpacity={backgroundOpacity()}
       onClose={closePopup}
       onRetry={retryCurrent}
-      onToggleSettings={() => setSettingsOpen((open) => !open)}
-      onToggleTheme={() =>
-        setThemeMode((current) => (current === "dark" ? "light" : "dark"))
-      }
-      onSetBackgroundOpacity={setBackgroundOpacity}
-      onSaveSettings={async (update) => {
-        await saveProviderSettings(update);
-        setSettingsOpen(false);
-      }}
       onStartGoogleSignIn={startGoogleSignIn}
-      onSignOutSync={signOutSync}
       onSetResultTab={setActiveResultTab}
       onStartWindowDrag={startWindowDrag}
     />
@@ -608,7 +594,6 @@ function App() {
 
 export function PopupView(props: {
   state: PopupState;
-  settingsOpen: boolean;
   providerSettings: ProviderSettings | null;
   syncAuthStatus?: SyncAuthStatus | null;
   activeResultTab: ResultTab;
@@ -616,18 +601,11 @@ export function PopupView(props: {
   backgroundOpacity?: number;
   onClose: () => void;
   onRetry: () => void;
-  onToggleSettings: () => void;
-  onToggleTheme: () => void;
-  onSetBackgroundOpacity?: (opacity: number) => void;
-  onSaveSettings: (update: ProviderSettingsUpdate) => Promise<void>;
   onStartGoogleSignIn?: () => Promise<void>;
-  onSignOutSync?: () => Promise<void>;
   onSetResultTab: (tab: ResultTab) => void;
   onStartWindowDrag?: (event: MouseEvent) => void;
 }) {
   const backgroundOpacity = () => props.backgroundOpacity ?? 0.94;
-  const setBackgroundOpacity = (opacity: number) =>
-    props.onSetBackgroundOpacity?.(opacity);
   const authRequired = () =>
     props.syncAuthStatus !== undefined &&
     (props.syncAuthStatus === null || !props.syncAuthStatus.signedIn);
@@ -652,29 +630,6 @@ export function PopupView(props: {
               headword={headwordForState(props.state)}
               inflections={inflectionsForState(props.state)}
             />
-          </div>
-          <div class="header-actions">
-            <button
-              class="button icon-button"
-              type="button"
-              aria-label="Settings"
-              aria-expanded={props.settingsOpen}
-              onClick={props.onToggleSettings}
-            >
-              <svg
-                class="settings-icon"
-                aria-hidden="true"
-                viewBox="0 0 24 24"
-                fill="none"
-                stroke="currentColor"
-                stroke-width="2"
-                stroke-linecap="round"
-                stroke-linejoin="round"
-              >
-                <path d="M12 15.5a3.5 3.5 0 1 0 0-7 3.5 3.5 0 0 0 0 7Z" />
-                <path d="M19.4 15a1.7 1.7 0 0 0 .34 1.88l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.7 1.7 0 0 0-1.88-.34 1.7 1.7 0 0 0-1.03 1.56V21a2 2 0 1 1-4 0v-.09a1.7 1.7 0 0 0-1.03-1.56 1.7 1.7 0 0 0-1.88.34l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06A1.7 1.7 0 0 0 4.6 15a1.7 1.7 0 0 0-1.56-1.03H3a2 2 0 1 1 0-4h.09A1.7 1.7 0 0 0 4.6 9a1.7 1.7 0 0 0-.34-1.88l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.7 1.7 0 0 0 9 4.6a1.7 1.7 0 0 0 1-1.56V3a2 2 0 1 1 4 0v.09a1.7 1.7 0 0 0 1.03 1.56 1.7 1.7 0 0 0 1.88-.34l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06A1.7 1.7 0 0 0 19.4 9c.2.61.79 1 1.42 1H21a2 2 0 1 1 0 4h-.09A1.7 1.7 0 0 0 19.4 15Z" />
-              </svg>
-            </button>
           </div>
         </header>
       </Show>
@@ -732,27 +687,6 @@ export function PopupView(props: {
             </Match>
           </Switch>
         </section>
-      </Show>
-
-      <Show when={props.settingsOpen && props.providerSettings}>
-        {(settings) => (
-          <div
-            class="settings-overlay"
-            role="presentation"
-            onMouseDown={props.onToggleSettings}
-          >
-            <SettingsPanel
-              settings={settings()}
-              syncAuthStatus={props.syncAuthStatus}
-              themeMode={props.themeMode}
-              backgroundOpacity={backgroundOpacity()}
-              onSave={props.onSaveSettings}
-              onSignOutSync={props.onSignOutSync}
-              onToggleTheme={props.onToggleTheme}
-              onSetBackgroundOpacity={setBackgroundOpacity}
-            />
-          </div>
-        )}
       </Show>
     </main>
   );
@@ -826,7 +760,7 @@ function EmptyState(props: { shortcut: string }) {
   );
 }
 
-function SettingsPanel(props: {
+export function SettingsPanel(props: {
   settings: ProviderSettings;
   syncAuthStatus?: SyncAuthStatus | null;
   themeMode: ThemeMode;
@@ -875,6 +809,7 @@ function SettingsPanel(props: {
       closeShortcut().trim() !==
         (props.settings.closeShortcut ?? DEFAULT_CLOSE_SHORTCUT) ||
       props.backgroundOpacity !== props.settings.backgroundOpacity ||
+      props.themeMode !== props.settings.theme ||
       model().trim() !== props.settings.model ||
       resultLanguage().trim() !== props.settings.resultLanguage ||
       apiKey().trim().length > 0 ||
@@ -946,6 +881,7 @@ function SettingsPanel(props: {
         shortcut: shortcut().trim(),
         closeShortcut: closeShortcut().trim(),
         backgroundOpacity: props.backgroundOpacity,
+        theme: props.themeMode,
         provider: provider(),
         model: model().trim(),
         resultLanguage: resultLanguage().trim(),

@@ -3,6 +3,13 @@ use serde::{Deserialize, Serialize};
 use std::{fs, path::PathBuf, sync::Mutex};
 use tauri::{AppHandle, Manager};
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum ThemeMode {
+    Light,
+    Dark,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum ProviderKind {
@@ -41,6 +48,8 @@ pub struct ProviderSettings {
     pub close_shortcut: String,
     #[serde(default = "default_background_opacity")]
     pub background_opacity: f64,
+    #[serde(default = "default_theme")]
+    pub theme: ThemeMode,
     pub provider: ProviderKind,
     pub model: String,
     pub result_language: String,
@@ -59,6 +68,7 @@ impl Default for ProviderSettings {
             shortcut: shortcut::DEFAULT_SHORTCUT_LABEL.to_string(),
             close_shortcut: shortcut::DEFAULT_CLOSE_SHORTCUT_LABEL.to_string(),
             background_opacity: default_background_opacity(),
+            theme: default_theme(),
             provider: ProviderKind::Gemini,
             model: ProviderKind::Gemini.default_model().to_string(),
             result_language: "ja".to_string(),
@@ -105,6 +115,7 @@ pub struct ProviderSettingsView {
     pub shortcut: String,
     pub close_shortcut: String,
     pub background_opacity: f64,
+    pub theme: ThemeMode,
     pub provider: ProviderKind,
     pub model: String,
     pub result_language: String,
@@ -121,6 +132,7 @@ pub struct ProviderSettingsUpdate {
     pub shortcut: String,
     pub close_shortcut: String,
     pub background_opacity: f64,
+    pub theme: ThemeMode,
     pub provider: ProviderKind,
     pub model: String,
     pub result_language: String,
@@ -227,6 +239,7 @@ impl SettingsState {
             shortcut: normalized_shortcut,
             close_shortcut: normalized_close_shortcut,
             background_opacity,
+            theme: update.theme,
             provider: update.provider,
             model: model.to_string(),
             result_language: result_language.to_string(),
@@ -297,6 +310,7 @@ fn settings_view(app: &AppHandle, settings: ProviderSettings) -> ProviderSetting
         shortcut: settings.shortcut,
         close_shortcut: settings.close_shortcut,
         background_opacity: settings.background_opacity,
+        theme: settings.theme,
         provider: settings.provider,
         model: settings.model,
         result_language: settings.result_language,
@@ -391,6 +405,10 @@ fn default_background_opacity() -> f64 {
     0.94
 }
 
+fn default_theme() -> ThemeMode {
+    ThemeMode::Light
+}
+
 fn default_supabase_callback_port() -> u16 {
     38271
 }
@@ -424,4 +442,53 @@ fn normalize_optional_url(value: &str) -> Result<String, AppError> {
     }
 
     Ok(trimmed)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{normalize_optional_url, validate_background_opacity};
+    use crate::errors::AppErrorCode;
+
+    #[test]
+    fn validates_background_opacity_within_range() {
+        assert_eq!(validate_background_opacity(0.0).expect("min opacity"), 0.0);
+        assert_eq!(validate_background_opacity(1.0).expect("max opacity"), 1.0);
+        assert_eq!(
+            validate_background_opacity(0.456).expect("rounded opacity"),
+            0.46
+        );
+    }
+
+    #[test]
+    fn rejects_non_finite_background_opacity() {
+        let error = validate_background_opacity(f64::NAN).expect_err("nan should fail");
+
+        assert_eq!(error.code, AppErrorCode::ProviderNotConfigured);
+        assert!(error.diagnostic_message.contains("background opacity"));
+    }
+
+    #[test]
+    fn rejects_background_opacity_outside_range() {
+        let error = validate_background_opacity(1.5).expect_err("too high should fail");
+
+        assert_eq!(error.code, AppErrorCode::ProviderNotConfigured);
+    }
+
+    #[test]
+    fn normalizes_optional_supabase_url() {
+        assert_eq!(
+            normalize_optional_url("  https://project.supabase.co/  ").expect("https url"),
+            "https://project.supabase.co"
+        );
+        assert_eq!(normalize_optional_url("").expect("empty url"), "");
+    }
+
+    #[test]
+    fn rejects_invalid_supabase_url_scheme() {
+        let error =
+            normalize_optional_url("http://example.com").expect_err("http should be rejected");
+
+        assert_eq!(error.code, AppErrorCode::ProviderNotConfigured);
+        assert!(error.diagnostic_message.contains("https://"));
+    }
 }

@@ -13,9 +13,10 @@
   "app": {
     "windows": [
       {
+        "label": "main",
         "title": "lexi",
         "width": 400,
-        "height": 1000,
+        "height": 1400,
         "minWidth": 400,
         "minHeight": 360,
         "resizable": true,
@@ -24,6 +25,21 @@
         "alwaysOnTop": false,
         "decorations": false,
         "skipTaskbar": true
+      },
+      {
+        "label": "settings",
+        "title": "Lexi Settings",
+        "width": 420,
+        "height": 760,
+        "minWidth": 380,
+        "minHeight": 520,
+        "resizable": true,
+        "transparent": false,
+        "visible": false,
+        "alwaysOnTop": false,
+        "decorations": true,
+        "skipTaskbar": false,
+        "center": true
       }
     ],
     "security": {

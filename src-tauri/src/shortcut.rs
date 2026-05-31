@@ -479,6 +479,21 @@ mod tests {
     use serde_json::json;
 
     #[test]
+    fn serializes_capturing_event_with_frontend_field_names() {
+        let event = CaptureEvent::Capturing {
+            shortcut: DEFAULT_SHORTCUT_LABEL.to_string(),
+        };
+
+        assert_eq!(
+            serde_json::to_value(event).expect("capture event should serialize"),
+            json!({
+                "status": "capturing",
+                "shortcut": "Ctrl+Shift+X",
+            })
+        );
+    }
+
+    #[test]
     fn serializes_captured_event_with_frontend_field_names() {
         let event = CaptureEvent::Captured {
             shortcut: DEFAULT_SHORTCUT_LABEL.to_string(),
