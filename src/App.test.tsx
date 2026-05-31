@@ -12,7 +12,11 @@ import {
   type TextTranslationResultV1,
 } from "./lib/schema";
 import App, {
+  DEFAULT_CAPTURE_SHORTCUT,
+  DEFAULT_CLOSE_SHORTCUT,
+  DEFAULT_PRONUNCIATION_SHORTCUT,
   PopupView,
+  speakableHeadwordForState,
   type PopupState,
   type ProviderSettings,
 } from "./App";
@@ -117,7 +121,9 @@ function defaultProviderSettings(
   overrides: Partial<ProviderSettings> = {},
 ): ProviderSettings {
   return {
-    shortcut: "Ctrl+Shift+X",
+    shortcut: DEFAULT_CAPTURE_SHORTCUT,
+    pronunciationShortcut: DEFAULT_PRONUNCIATION_SHORTCUT,
+    closeShortcut: DEFAULT_CLOSE_SHORTCUT,
     backgroundOpacity: 0.94,
     theme: "light",
     provider: "gemini",
@@ -167,7 +173,7 @@ function renderSettingsView(
 function readyState(result: LexiResult = mockResult()): PopupState {
   return {
     kind: "ready",
-    shortcut: "Ctrl+Shift+X",
+    shortcut: DEFAULT_CAPTURE_SHORTCUT,
     capture: {
       captureMethod: "uia-foreground-window",
       sourceProcess: "notepad.exe",
@@ -263,14 +269,14 @@ function emptyPartialResultForTest() {
 
 describe("PopupView", () => {
   it("does not render Lexi as a placeholder headword while idle", () => {
-    const root = renderPopup({ kind: "idle", shortcut: "Ctrl+Shift+X" });
+    const root = renderPopup({ kind: "idle", shortcut: DEFAULT_CAPTURE_SHORTCUT });
 
     expect(root.querySelector(".headword")?.textContent).toBe("");
     expect(root.textContent).toContain("待機中");
   });
 
   it("starts the capture flow with the skeleton result layout", () => {
-    const root = renderPopup({ kind: "capturing", shortcut: "Ctrl+Shift+X" });
+    const root = renderPopup({ kind: "capturing", shortcut: DEFAULT_CAPTURE_SHORTCUT });
 
     expect(root.querySelector(".headword")?.textContent).toBe("");
     expect(root.querySelector(".skeleton-block")).toBeInstanceOf(HTMLElement);
@@ -285,7 +291,7 @@ describe("PopupView", () => {
   it("renders the requesting state after capture metadata is available", () => {
     const state: PopupState = {
       kind: "requesting",
-      shortcut: "Ctrl+Shift+X",
+      shortcut: DEFAULT_CAPTURE_SHORTCUT,
       capture: {
         captureMethod: "uia-foreground-window",
         sourceProcess: "notepad.exe",
@@ -305,6 +311,23 @@ describe("PopupView", () => {
     expect(busyRegion).toBeInstanceOf(HTMLElement);
     expect(busyRegion?.getAttribute("aria-label")).toContain("42");
     expect(root.textContent).not.toContain("生成中");
+  });
+
+  it("renders a headword voice button for word-study results", () => {
+    const root = renderPopup(readyState());
+    const button = root.querySelector(".headword-voice-button");
+
+    expect(button).toBeInstanceOf(HTMLButtonElement);
+    expect(button?.getAttribute("aria-label")).toContain("subtle");
+    expect(button?.getAttribute("aria-label")).toContain(DEFAULT_PRONUNCIATION_SHORTCUT);
+    expect(speakableHeadwordForState(readyState())).toBe("subtle");
+  });
+
+  it("does not render a headword voice button for text translation results", () => {
+    const root = renderPopup(readyState(mockTextTranslationResult()));
+
+    expect(root.querySelector(".headword-voice-button")).toBeNull();
+    expect(speakableHeadwordForState(readyState(mockTextTranslationResult()))).toBeNull();
   });
 
   it("renders LexiResultV1 meaning content without old bottom actions", () => {
@@ -350,7 +373,7 @@ describe("PopupView", () => {
   it("renders text translation pending state without dictionary fields", () => {
     const root = renderPopup({
       kind: "streaming",
-      shortcut: "Ctrl+Shift+X",
+      shortcut: DEFAULT_CAPTURE_SHORTCUT,
       requestId: 7,
       mode: "text-translation",
       sourceText: "This is pending.",
@@ -481,7 +504,7 @@ describe("PopupView", () => {
   it("renders partial streaming content before final validation", () => {
     const state: PopupState = {
       kind: "streaming",
-      shortcut: "Ctrl+Shift+X",
+      shortcut: DEFAULT_CAPTURE_SHORTCUT,
       requestId: 7,
       mode: "word-study",
       sourceText: null,
@@ -534,7 +557,7 @@ describe("PopupView", () => {
   it("keeps the result body mounted when streaming becomes ready", async () => {
     const streamingState: PopupState = {
       kind: "streaming",
-      shortcut: "Ctrl+Shift+X",
+      shortcut: DEFAULT_CAPTURE_SHORTCUT,
       requestId: 7,
       mode: "word-study",
       sourceText: null,
@@ -577,7 +600,7 @@ describe("PopupView", () => {
   it("updates similar words when a streaming partial replaces same-index content", async () => {
     const first: PopupState = {
       kind: "streaming",
-      shortcut: "Ctrl+Shift+X",
+      shortcut: DEFAULT_CAPTURE_SHORTCUT,
       requestId: 7,
       mode: "word-study",
       sourceText: null,
@@ -639,7 +662,7 @@ describe("PopupView", () => {
   it("hides retry for non-retryable errors", () => {
     const state: PopupState = {
       kind: "error",
-      shortcut: "Ctrl+Shift+X",
+      shortcut: DEFAULT_CAPTURE_SHORTCUT,
       error: {
         code: "SelectionEmpty",
         userMessage: "Select text before running Lexi.",
@@ -664,7 +687,7 @@ describe("PopupView", () => {
   it("renders streaming dictionary content during validating phase", () => {
     const state: PopupState = {
       kind: "streaming",
-      shortcut: "Ctrl+Shift+X",
+      shortcut: DEFAULT_CAPTURE_SHORTCUT,
       requestId: 9,
       mode: "word-study",
       sourceText: null,
@@ -702,7 +725,7 @@ describe("PopupView", () => {
   it("renders user-safe errors and diagnostics", () => {
     const state: PopupState = {
       kind: "error",
-      shortcut: "Ctrl+Shift+X",
+      shortcut: DEFAULT_CAPTURE_SHORTCUT,
       error: {
         code: "SelectionUnavailable",
         userMessage: "This app does not expose selected text to Lexi.",
@@ -757,6 +780,7 @@ describe("PopupView", () => {
     expect(root.textContent).toContain("Word provider");
     expect(root.textContent).toContain("Capture shortcut");
     expect(root.textContent).toContain("Close shortcut");
+    expect(root.textContent).toContain("Pronunciation shortcut");
     expect(root.textContent).toContain("Theme");
     expect(root.textContent).toContain("Background opacity");
     expect(root.textContent).toContain("30%");
@@ -797,7 +821,7 @@ describe("PopupView", () => {
     expect(onSetBackgroundOpacity).toHaveBeenCalledWith(0.45);
     const shortcutButton = root.querySelector(".shortcut-recorder");
     expect(shortcutButton).toBeInstanceOf(HTMLButtonElement);
-    expect(shortcutButton!.textContent).toBe("Ctrl+Shift+X");
+    expect(shortcutButton!.textContent).toBe(DEFAULT_CAPTURE_SHORTCUT);
 
     root.remove();
   });
@@ -828,7 +852,8 @@ describe("PopupView", () => {
     await Promise.resolve();
 
     expect(onSave).toHaveBeenCalledWith({
-      shortcut: "Ctrl+Shift+X",
+      shortcut: DEFAULT_CAPTURE_SHORTCUT,
+      pronunciationShortcut: DEFAULT_PRONUNCIATION_SHORTCUT,
       closeShortcut: "Escape",
       backgroundOpacity: 0.94,
       theme: "light",
@@ -883,7 +908,8 @@ describe("PopupView", () => {
 
     expect(onSave).toHaveBeenCalledWith({
       shortcut: "Ctrl+Shift+(",
-      closeShortcut: "Escape",
+      closeShortcut: DEFAULT_CLOSE_SHORTCUT,
+      pronunciationShortcut: DEFAULT_PRONUNCIATION_SHORTCUT,
       backgroundOpacity: 0.94,
       theme: "light",
       provider: "gemini",
@@ -928,7 +954,8 @@ describe("PopupView", () => {
     await Promise.resolve();
 
     expect(onSave).toHaveBeenCalledWith({
-      shortcut: "Ctrl+Shift+X",
+      shortcut: DEFAULT_CAPTURE_SHORTCUT,
+      pronunciationShortcut: DEFAULT_PRONUNCIATION_SHORTCUT,
       closeShortcut: "F9",
       backgroundOpacity: 0.94,
       theme: "light",
@@ -974,7 +1001,8 @@ describe("PopupView", () => {
     await Promise.resolve();
 
     expect(onSave).toHaveBeenCalledWith({
-      shortcut: "Ctrl+Shift+X",
+      shortcut: DEFAULT_CAPTURE_SHORTCUT,
+      pronunciationShortcut: DEFAULT_PRONUNCIATION_SHORTCUT,
       closeShortcut: "Escape",
       backgroundOpacity: 0.6,
       theme: "light",
@@ -1025,7 +1053,8 @@ describe("PopupView", () => {
     await Promise.resolve();
 
     expect(onSave).toHaveBeenCalledWith({
-      shortcut: "Ctrl+Shift+X",
+      shortcut: DEFAULT_CAPTURE_SHORTCUT,
+      pronunciationShortcut: DEFAULT_PRONUNCIATION_SHORTCUT,
       closeShortcut: "Escape",
       backgroundOpacity: 0.94,
       theme: "light",
@@ -1127,7 +1156,9 @@ describe("App stream flow", () => {
     vi.mocked(invoke).mockImplementation((command) => {
       if (command === "get_provider_settings") {
         return Promise.resolve({
-          shortcut: "Ctrl+Shift+X",
+          shortcut: DEFAULT_CAPTURE_SHORTCUT,
+          pronunciationShortcut: DEFAULT_PRONUNCIATION_SHORTCUT,
+          closeShortcut: DEFAULT_CLOSE_SHORTCUT,
           backgroundOpacity: 0.94,
           theme: "light",
           provider: "gemini",
@@ -1142,7 +1173,7 @@ describe("App stream flow", () => {
       }
       if (command === "get_shortcut_status") {
         return Promise.resolve({
-          shortcut: "Ctrl+Shift+X",
+          shortcut: DEFAULT_CAPTURE_SHORTCUT,
           registered: true,
           registrationError: null,
         });
@@ -1171,7 +1202,9 @@ describe("App stream flow", () => {
     vi.mocked(invoke).mockImplementation((command) => {
       if (command === "get_provider_settings") {
         return Promise.resolve({
-          shortcut: "Ctrl+Shift+X",
+          shortcut: DEFAULT_CAPTURE_SHORTCUT,
+          pronunciationShortcut: DEFAULT_PRONUNCIATION_SHORTCUT,
+          closeShortcut: DEFAULT_CLOSE_SHORTCUT,
           backgroundOpacity: 0.94,
           theme: "light",
           provider: "gemini",
@@ -1187,7 +1220,7 @@ describe("App stream flow", () => {
       }
       if (command === "get_shortcut_status") {
         return Promise.resolve({
-          shortcut: "Ctrl+Shift+X",
+          shortcut: DEFAULT_CAPTURE_SHORTCUT,
           registered: true,
           registrationError: null,
         });
@@ -1230,7 +1263,9 @@ describe("App stream flow", () => {
     vi.mocked(invoke).mockImplementation((command) => {
       if (command === "get_provider_settings") {
         return Promise.resolve({
-          shortcut: "Ctrl+Shift+X",
+          shortcut: DEFAULT_CAPTURE_SHORTCUT,
+          pronunciationShortcut: DEFAULT_PRONUNCIATION_SHORTCUT,
+          closeShortcut: DEFAULT_CLOSE_SHORTCUT,
           backgroundOpacity: 0.72,
           theme: "light",
           provider: "gemini",
@@ -1243,7 +1278,7 @@ describe("App stream flow", () => {
       }
       if (command === "get_shortcut_status") {
         return Promise.resolve({
-          shortcut: "Ctrl+Shift+X",
+          shortcut: DEFAULT_CAPTURE_SHORTCUT,
           registered: true,
           registrationError: null,
         });
@@ -1275,7 +1310,7 @@ describe("App stream flow", () => {
         status: "started",
         requestId: 42,
         selectedTextPreview: "subtle",
-        shortcut: "Ctrl+Shift+X",
+        shortcut: DEFAULT_CAPTURE_SHORTCUT,
         captureMethod: "uia-foreground-window",
         sourceProcess: "notepad.exe",
         sourceWindowTitle: "note.txt - Notepad",
@@ -1306,7 +1341,7 @@ describe("App stream flow", () => {
 
     expect(invoke).toHaveBeenCalledWith("run_transform_stream", {
       capture: {
-        shortcut: "Ctrl+Shift+X",
+        shortcut: DEFAULT_CAPTURE_SHORTCUT,
         captureMethod: "uia-foreground-window",
         sourceProcess: "notepad.exe",
         sourceWindowTitle: "note.txt - Notepad",
@@ -1323,7 +1358,9 @@ describe("App stream flow", () => {
     vi.mocked(invoke).mockImplementation((command) => {
       if (command === "get_provider_settings") {
         return Promise.resolve({
-          shortcut: "Ctrl+Shift+X",
+          shortcut: DEFAULT_CAPTURE_SHORTCUT,
+          pronunciationShortcut: DEFAULT_PRONUNCIATION_SHORTCUT,
+          closeShortcut: DEFAULT_CLOSE_SHORTCUT,
           backgroundOpacity: 0.72,
           theme: "light",
           provider: "gemini",
@@ -1338,7 +1375,7 @@ describe("App stream flow", () => {
       }
       if (command === "get_shortcut_status") {
         return Promise.resolve({
-          shortcut: "Ctrl+Shift+X",
+          shortcut: DEFAULT_CAPTURE_SHORTCUT,
           registered: true,
           registrationError: null,
         });
@@ -1368,7 +1405,7 @@ describe("App stream flow", () => {
         status: "started",
         requestId: 1,
         selectedTextPreview: "first",
-        shortcut: "Ctrl+Shift+X",
+        shortcut: DEFAULT_CAPTURE_SHORTCUT,
         captureMethod: "uia-foreground-window",
         sourceProcess: "notepad.exe",
         sourceWindowTitle: "first.txt",
@@ -1383,7 +1420,7 @@ describe("App stream flow", () => {
         status: "started",
         requestId: 2,
         selectedTextPreview: "second",
-        shortcut: "Ctrl+Shift+X",
+        shortcut: DEFAULT_CAPTURE_SHORTCUT,
         captureMethod: "uia-foreground-window",
         sourceProcess: "notepad.exe",
         sourceWindowTitle: "second.txt",

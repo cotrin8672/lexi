@@ -193,6 +193,62 @@ button {
   min-width: 0;
 }
 
+.headword-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  min-width: 0;
+}
+
+.headword-row .headword {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.headword-voice-button {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 36px;
+  height: 36px;
+  margin-top: 0.35rem;
+  padding: 0;
+  border: 1px solid var(--paper-line);
+  border-radius: 999px;
+  background: rgb(255 255 255 / calc(var(--background-opacity) * 0.72));
+  color: var(--accent);
+  box-shadow: 0 1px 0 rgb(255 255 255 / 0.45) inset;
+  transition:
+    background-color 120ms ease,
+    border-color 120ms ease,
+    color 120ms ease,
+    transform 120ms ease;
+}
+
+.headword-voice-button:hover {
+  background: var(--accent-soft);
+  border-color: rgb(154 52 18 / 0.28);
+  color: var(--accent-strong);
+}
+
+.headword-voice-button:active {
+  transform: scale(0.96);
+}
+
+.headword-voice-button:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.headword-voice-icon {
+  display: inline-flex;
+}
+
+.popup-shell.theme-dark .headword-voice-button {
+  background: rgb(33 31 38 / calc(var(--background-opacity) * 0.92));
+}
+
 .headword {
   margin: 0;
   color: var(--ink-strong);

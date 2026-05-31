@@ -12,7 +12,10 @@ import {
 } from "./App";
 import "./App.css";
 
-const DEFAULT_CLOSE_SHORTCUT = "Escape";
+import {
+  DEFAULT_CLOSE_SHORTCUT,
+  DEFAULT_PRONUNCIATION_SHORTCUT,
+} from "./App";
 
 function buildSettingsUpdate(
   settings: ProviderSettings,
@@ -21,6 +24,8 @@ function buildSettingsUpdate(
   return {
     shortcut: settings.shortcut,
     closeShortcut: settings.closeShortcut ?? DEFAULT_CLOSE_SHORTCUT,
+    pronunciationShortcut:
+      settings.pronunciationShortcut ?? DEFAULT_PRONUNCIATION_SHORTCUT,
     backgroundOpacity: settings.backgroundOpacity,
     theme: settings.theme,
     provider: settings.provider,

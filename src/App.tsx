@@ -15,6 +15,7 @@ import { listen } from "@tauri-apps/api/event";
 import { getCurrentWindow, LogicalSize } from "@tauri-apps/api/window";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import type { AppError } from "./lib/errors";
+import { speakText } from "./lib/speech";
 import {
   type Idiom,
   type Inflection,
@@ -76,6 +77,7 @@ type ResultMode = "word-study" | "text-translation";
 export type ProviderSettings = {
   shortcut: string;
   closeShortcut?: string;
+  pronunciationShortcut?: string;
   backgroundOpacity: number;
   theme: ThemeMode;
   provider: ProviderKind;
@@ -91,6 +93,7 @@ export type ProviderSettings = {
 export type ProviderSettingsUpdate = {
   shortcut: string;
   closeShortcut: string;
+  pronunciationShortcut: string;
   backgroundOpacity: number;
   theme: ThemeMode;
   provider: ProviderKind;
@@ -200,7 +203,9 @@ const RESULT_LANGUAGE_OPTIONS = [
   { value: "zh", label: "中文" },
 ] as const;
 
-const DEFAULT_CLOSE_SHORTCUT = "Escape";
+export const DEFAULT_CAPTURE_SHORTCUT = "Ctrl+E";
+export const DEFAULT_CLOSE_SHORTCUT = "Escape";
+export const DEFAULT_PRONUNCIATION_SHORTCUT = "Ctrl+Shift+P";
 const POPUP_WINDOW_SIZE = new LogicalSize(400, 700);
 const AUTH_WINDOW_SIZE = new LogicalSize(460, 560);
 const POPUP_MIN_SIZE = new LogicalSize(400, 360);
@@ -236,7 +241,7 @@ export type PopupState =
 function App() {
   const [state, setState] = createSignal<PopupState>({
     kind: "idle",
-    shortcut: "Ctrl+Shift+X",
+    shortcut: DEFAULT_CAPTURE_SHORTCUT,
   });
   const [providerSettings, setProviderSettings] =
     createSignal<ProviderSettings | null>(null);
@@ -550,7 +555,18 @@ function App() {
         return;
       }
 
+      const pronunciationShortcut =
+        providerSettings()?.pronunciationShortcut ?? DEFAULT_PRONUNCIATION_SHORTCUT;
       const current = state();
+      if (matchesShortcutEvent(event, pronunciationShortcut)) {
+        const headword = speakableHeadwordForState(current);
+        if (headword) {
+          event.preventDefault();
+          speakText(headword);
+        }
+        return;
+      }
+
       if (
         event.key === "Enter" &&
         current.kind === "error" &&
@@ -625,7 +641,20 @@ export function PopupView(props: {
             onMouseDown={props.onStartWindowDrag ?? (() => undefined)}
           />
           <div class="title-block">
-            <h1 class="headword">{headwordForState(props.state)}</h1>
+            <div class="headword-row">
+              <h1 class="headword">{headwordForState(props.state)}</h1>
+              <Show when={speakableHeadwordForState(props.state)}>
+                {(headword) => (
+                  <HeadwordVoiceButton
+                    headword={headword()}
+                    shortcutLabel={
+                      props.providerSettings?.pronunciationShortcut ??
+                      DEFAULT_PRONUNCIATION_SHORTCUT
+                    }
+                  />
+                )}
+              </Show>
+            </div>
             <InflectionLine
               headword={headwordForState(props.state)}
               inflections={inflectionsForState(props.state)}
@@ -689,6 +718,33 @@ export function PopupView(props: {
         </section>
       </Show>
     </main>
+  );
+}
+
+function HeadwordVoiceButton(props: {
+  headword: string;
+  shortcutLabel: string;
+}) {
+  return (
+    <button
+      class="headword-voice-button"
+      type="button"
+      aria-label={`${props.headword} を発音 (${props.shortcutLabel})`}
+      title={`発音 (${props.shortcutLabel})`}
+      onClick={(event) => {
+        event.stopPropagation();
+        speakText(props.headword);
+      }}
+    >
+      <span class="headword-voice-icon" aria-hidden="true">
+        <svg viewBox="0 0 24 24" width="20" height="20">
+          <path
+            fill="currentColor"
+            d="M3 10v4h4l5 5V5L7 10H3zm13.5 2c0-1.77-1.02-3.29-2.5-4.03v8.06c1.48-.74 2.5-2.26 2.5-4.03zM14 3.23v2.06c2.89.86 5 3.54 5 6.71s-2.11 5.85-5 6.71v2.06c4.01-.91 7-4.49 7-8.77s-2.99-7.86-7-8.77z"
+          />
+        </svg>
+      </span>
+    </button>
   );
 }
 
@@ -777,6 +833,9 @@ export function SettingsPanel(props: {
   const [closeShortcut, setCloseShortcut] = createSignal(
     props.settings.closeShortcut ?? DEFAULT_CLOSE_SHORTCUT,
   );
+  const [pronunciationShortcut, setPronunciationShortcut] = createSignal(
+    props.settings.pronunciationShortcut ?? DEFAULT_PRONUNCIATION_SHORTCUT,
+  );
   const [model, setModel] = createSignal(props.settings.model);
   const [resultLanguage, setResultLanguage] = createSignal(
     props.settings.resultLanguage,
@@ -798,6 +857,10 @@ export function SettingsPanel(props: {
     createSignal(false);
   const [recordingCloseShortcutPreview, setRecordingCloseShortcutPreview] =
     createSignal("");
+  const [recordingPronunciationShortcut, setRecordingPronunciationShortcut] =
+    createSignal(false);
+  const [recordingPronunciationShortcutPreview, setRecordingPronunciationShortcutPreview] =
+    createSignal("");
   const [saving, setSaving] = createSignal(false);
   const [signingIn, setSigningIn] = createSignal(false);
   const [error, setError] = createSignal<string | null>(null);
@@ -808,6 +871,8 @@ export function SettingsPanel(props: {
       shortcut().trim() !== props.settings.shortcut ||
       closeShortcut().trim() !==
         (props.settings.closeShortcut ?? DEFAULT_CLOSE_SHORTCUT) ||
+      pronunciationShortcut().trim() !==
+        (props.settings.pronunciationShortcut ?? DEFAULT_PRONUNCIATION_SHORTCUT) ||
       props.backgroundOpacity !== props.settings.backgroundOpacity ||
       props.themeMode !== props.settings.theme ||
       model().trim() !== props.settings.model ||
@@ -880,6 +945,7 @@ export function SettingsPanel(props: {
       await props.onSave({
         shortcut: shortcut().trim(),
         closeShortcut: closeShortcut().trim(),
+        pronunciationShortcut: pronunciationShortcut().trim(),
         backgroundOpacity: props.backgroundOpacity,
         theme: props.themeMode,
         provider: provider(),
@@ -1065,6 +1131,64 @@ export function SettingsPanel(props: {
                   : closeShortcut()
               }
               recording={recordingCloseShortcut()}
+            />
+          </button>
+        </div>
+
+        <div class="settings-field">
+          <span>Pronunciation shortcut</span>
+          <button
+            class="button shortcut-recorder"
+            data-shortcut-recorder=""
+            type="button"
+            aria-pressed={recordingPronunciationShortcut()}
+            onClick={() => {
+              setRecordingPronunciationShortcut(true);
+              setRecordingPronunciationShortcutPreview("");
+            }}
+            onBlur={() => {
+              setRecordingPronunciationShortcut(false);
+              setRecordingPronunciationShortcutPreview("");
+            }}
+            onKeyDown={(event) => {
+              if (!recordingPronunciationShortcut()) {
+                return;
+              }
+
+              event.preventDefault();
+              event.stopPropagation();
+
+              if (event.key === "Escape") {
+                setRecordingPronunciationShortcut(false);
+                setRecordingPronunciationShortcutPreview("");
+                return;
+              }
+
+              setRecordingPronunciationShortcutPreview(
+                shortcutPreviewFromKeyboardEvent(event),
+              );
+              const nextShortcut = shortcutFromKeyboardEvent(event);
+              if (nextShortcut) {
+                setPronunciationShortcut(nextShortcut);
+                setRecordingPronunciationShortcut(false);
+                setRecordingPronunciationShortcutPreview("");
+              }
+            }}
+            onKeyUp={(event) => {
+              if (recordingPronunciationShortcut()) {
+                setRecordingPronunciationShortcutPreview(
+                  shortcutPreviewFromKeyboardEvent(event),
+                );
+              }
+            }}
+          >
+            <ShortcutKeySequence
+              shortcut={
+                recordingPronunciationShortcut()
+                  ? recordingPronunciationShortcutPreview() || "Press shortcut"
+                  : pronunciationShortcut()
+              }
+              recording={recordingPronunciationShortcut()}
             />
           </button>
         </div>
@@ -1767,6 +1891,20 @@ function titleForState(state: PopupState): string {
     case "idle":
       return "";
   }
+}
+
+export function speakableHeadwordForState(state: PopupState): string | null {
+  if (state.kind === "ready" && state.result.mode === "word-study") {
+    const headword = state.result.headword.trim();
+    return headword.length > 0 ? headword : null;
+  }
+
+  if (state.kind === "streaming" && state.mode === "word-study") {
+    const headword = (state.partial.headword ?? "").trim();
+    return headword.length > 0 ? headword : null;
+  }
+
+  return null;
 }
 
 function headwordForState(state: PopupState): string {
