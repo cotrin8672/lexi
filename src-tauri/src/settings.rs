@@ -342,11 +342,11 @@ fn read_settings(app: &AppHandle) -> Result<ProviderSettings, AppError> {
     }
 
     let raw = fs::read_to_string(&path).map_err(|error| {
-        AppError::provider_request_failed(format!("provider settings read failed: {error}"), true)
+        AppError::settings_io_failed(format!("provider settings read failed: {error}"), true)
     })?;
 
     let mut settings = serde_json::from_str::<ProviderSettings>(&raw).map_err(|error| {
-        AppError::provider_request_failed(format!("provider settings parse failed: {error}"), false)
+        AppError::settings_io_failed(format!("provider settings parse failed: {error}"), false)
     })?;
 
     if settings.provider == ProviderKind::DeepL {
@@ -361,14 +361,14 @@ fn write_settings(app: &AppHandle, settings: &ProviderSettings) -> Result<(), Ap
     let path = settings_path(app)?;
     ensure_parent(&path)?;
     let raw = serde_json::to_string_pretty(settings).map_err(|error| {
-        AppError::provider_request_failed(
+        AppError::settings_io_failed(
             format!("provider settings serialize failed: {error}"),
             false,
         )
     })?;
 
     fs::write(path, raw).map_err(|error| {
-        AppError::provider_request_failed(format!("provider settings write failed: {error}"), true)
+        AppError::settings_io_failed(format!("provider settings write failed: {error}"), true)
     })
 }
 
@@ -382,14 +382,14 @@ fn settings_path(app: &AppHandle) -> Result<PathBuf, AppError> {
         .app_config_dir()
         .map(|dir| dir.join("provider-settings.json"))
         .map_err(|error| {
-            AppError::provider_request_failed(format!("app config dir unavailable: {error}"), true)
+            AppError::settings_io_failed(format!("app config dir unavailable: {error}"), true)
         })
 }
 
 fn ensure_parent(path: &PathBuf) -> Result<(), AppError> {
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent).map_err(|error| {
-            AppError::provider_request_failed(
+            AppError::settings_io_failed(
                 format!("app config dir create failed: {error}"),
                 true,
             )

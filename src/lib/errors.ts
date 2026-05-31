@@ -6,6 +6,12 @@ export const appErrorCodes = [
   "ProviderNotConfigured",
   "ProviderRequestFailed",
   "InvalidModelOutput",
+  "CredentialStorageFailed",
+  "SettingsIoFailed",
+  "VocabularyStoreFailed",
+  "SyncAuthRequired",
+  "SyncPushFailed",
+  "SyncPullFailed",
 ] as const;
 
 export type AppErrorCode = (typeof appErrorCodes)[number];

@@ -147,7 +147,7 @@ mod platform {
         };
 
         unsafe { CredWriteW(&credential, 0) }.map_err(|error| {
-            AppError::provider_request_failed(
+            AppError::credential_storage_failed(
                 format!("Windows Credential Manager write failed: {error}"),
                 true,
             )
@@ -173,7 +173,7 @@ mod platform {
                 return Ok(None);
             }
 
-            return Err(AppError::provider_request_failed(
+            return Err(AppError::credential_storage_failed(
                 format!("Windows Credential Manager read failed: {error}"),
                 true,
             ));
@@ -191,7 +191,7 @@ mod platform {
             )
         };
         let secret = String::from_utf8(bytes.to_vec()).map_err(|error| {
-            AppError::provider_request_failed(
+            AppError::credential_storage_failed(
                 format!("Windows Credential Manager secret decode failed: {error}"),
                 false,
             )
@@ -215,7 +215,7 @@ mod platform {
                 return Ok(());
             }
 
-            return Err(AppError::provider_request_failed(
+            return Err(AppError::credential_storage_failed(
                 format!("Windows Credential Manager delete failed: {error}"),
                 true,
             ));
@@ -238,21 +238,21 @@ mod platform {
         _user_name: &str,
         _secret: &str,
     ) -> Result<(), AppError> {
-        Err(AppError::provider_request_failed(
+        Err(AppError::credential_storage_failed(
             "OS credential storage is not implemented for this platform",
             false,
         ))
     }
 
     pub fn read_secret(_target_name: &str) -> Result<Option<String>, AppError> {
-        Err(AppError::provider_request_failed(
+        Err(AppError::credential_storage_failed(
             "OS credential storage is not implemented for this platform",
             false,
         ))
     }
 
     pub fn delete_secret(_target_name: &str) -> Result<(), AppError> {
-        Err(AppError::provider_request_failed(
+        Err(AppError::credential_storage_failed(
             "OS credential storage is not implemented for this platform",
             false,
         ))

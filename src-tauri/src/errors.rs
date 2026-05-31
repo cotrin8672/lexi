@@ -10,6 +10,9 @@ pub enum AppErrorCode {
     ProviderNotConfigured,
     ProviderRequestFailed,
     InvalidModelOutput,
+    CredentialStorageFailed,
+    SettingsIoFailed,
+    VocabularyStoreFailed,
     SyncAuthRequired,
     SyncPushFailed,
     SyncPullFailed,
@@ -61,6 +64,36 @@ impl AppError {
         Self::new(
             AppErrorCode::ProviderRequestFailed,
             "LLM request failed.",
+            diagnostic_message,
+            retryable,
+        )
+    }
+
+    pub fn credential_storage_failed(
+        diagnostic_message: impl Into<String>,
+        retryable: bool,
+    ) -> Self {
+        Self::new(
+            AppErrorCode::CredentialStorageFailed,
+            "Could not access stored credentials.",
+            diagnostic_message,
+            retryable,
+        )
+    }
+
+    pub fn settings_io_failed(diagnostic_message: impl Into<String>, retryable: bool) -> Self {
+        Self::new(
+            AppErrorCode::SettingsIoFailed,
+            "Could not read or save settings.",
+            diagnostic_message,
+            retryable,
+        )
+    }
+
+    pub fn vocabulary_store_failed(diagnostic_message: impl Into<String>, retryable: bool) -> Self {
+        Self::new(
+            AppErrorCode::VocabularyStoreFailed,
+            "Local vocabulary data could not be accessed.",
             diagnostic_message,
             retryable,
         )
