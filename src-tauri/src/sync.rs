@@ -913,6 +913,19 @@ mod tests {
     }
 
     #[test]
+    fn bootstrap_reads_revision_before_table_snapshot() {
+        let source = include_str!("vocabulary_bootstrap.rs");
+        let revision_position = source
+            .find("let base_revision")
+            .expect("bootstrap should read a base revision");
+        let lexeme_fetch_position = source
+            .find("let lexemes = fetch_all_rows")
+            .expect("bootstrap should fetch lexemes");
+
+        assert!(revision_position < lexeme_fetch_position);
+    }
+
+    #[test]
     fn sync_rpc_migration_records_each_lexeme_form_by_form_id() {
         let migration =
             include_str!("../../supabase/migrations/202605310002_vocabulary_sync_rpcs.sql");

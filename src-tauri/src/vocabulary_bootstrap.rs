@@ -73,6 +73,11 @@ pub async fn bootstrap_from_supabase(
     let client = build_http_client()?;
     let base_url = supabase_url.trim_end_matches('/');
 
+    let base_revision =
+        fetch_max_server_revision(&client, base_url, supabase_anon_key, access_token)
+            .await
+            .unwrap_or(0);
+
     let lexemes = fetch_all_rows::<BootstrapLexemeRow>(
         &client,
         base_url,
@@ -106,10 +111,6 @@ pub async fn bootstrap_from_supabase(
     )
     .await?;
 
-    let max_revision = fetch_max_server_revision(&client, base_url, supabase_anon_key, access_token)
-        .await
-        .unwrap_or(0);
-
     let mut connection = open_store(app)?;
     let user_id = effective_user_id();
     let tx = connection
@@ -136,8 +137,8 @@ pub async fn bootstrap_from_supabase(
     tx.commit()
         .map_err(|error| bootstrap_store_error(format!("bootstrap commit failed: {error}")))?;
 
-    if max_revision > 0 {
-        set_last_server_revision(app, max_revision)?;
+    if base_revision > 0 {
+        set_last_server_revision(app, base_revision)?;
     }
 
     Ok(())
@@ -193,7 +194,9 @@ fn upsert_bootstrap_lexeme(
             "#,
             params![user_id, row.language, row.canonical_key, row.id],
         )
-        .map_err(|error| bootstrap_store_error(format!("bootstrap stale form cleanup failed: {error}")))?;
+        .map_err(|error| {
+            bootstrap_store_error(format!("bootstrap stale form cleanup failed: {error}"))
+        })?;
 
     connection
         .execute(
@@ -206,7 +209,9 @@ fn upsert_bootstrap_lexeme(
             "#,
             params![user_id, row.language, row.canonical_key, row.id],
         )
-        .map_err(|error| bootstrap_store_error(format!("bootstrap stale card cleanup failed: {error}")))?;
+        .map_err(|error| {
+            bootstrap_store_error(format!("bootstrap stale card cleanup failed: {error}"))
+        })?;
 
     connection
         .execute(
@@ -216,7 +221,9 @@ fn upsert_bootstrap_lexeme(
             "#,
             params![user_id, row.language, row.canonical_key, row.id],
         )
-        .map_err(|error| bootstrap_store_error(format!("bootstrap stale lexeme cleanup failed: {error}")))?;
+        .map_err(|error| {
+            bootstrap_store_error(format!("bootstrap stale lexeme cleanup failed: {error}"))
+        })?;
 
     let favorite = if row.favorite.unwrap_or(false) { 1 } else { 0 };
     connection
@@ -249,7 +256,9 @@ fn upsert_bootstrap_lexeme(
                 row.deleted_at
             ],
         )
-        .map_err(|error| bootstrap_store_error(format!("bootstrap lexeme upsert failed: {error}")))?;
+        .map_err(|error| {
+            bootstrap_store_error(format!("bootstrap lexeme upsert failed: {error}"))
+        })?;
     Ok(())
 }
 
@@ -356,11 +365,14 @@ async fn fetch_max_server_revision(
         ])
         .send()
         .await
-        .map_err(|error| bootstrap_pull_error(format!("bootstrap max revision request failed: {error}")))?;
+        .map_err(|error| {
+            bootstrap_pull_error(format!("bootstrap max revision request failed: {error}"))
+        })?;
 
     let body = read_success_body(response, "vocabulary_changes max revision").await?;
-    let rows = serde_json::from_str::<Vec<MaxRevisionRow>>(&body)
-        .map_err(|error| bootstrap_store_error(format!("bootstrap max revision parse failed: {error}")))?;
+    let rows = serde_json::from_str::<Vec<MaxRevisionRow>>(&body).map_err(|error| {
+        bootstrap_store_error(format!("bootstrap max revision parse failed: {error}"))
+    })?;
     Ok(rows.first().map(|row| row.server_revision).unwrap_or(0))
 }
 
@@ -396,10 +408,9 @@ where
             request = request.query(&[(key, value)]);
         }
 
-        let response = request
-            .send()
-            .await
-            .map_err(|error| bootstrap_pull_error(format!("bootstrap {table} request failed: {error}")))?;
+        let response = request.send().await.map_err(|error| {
+            bootstrap_pull_error(format!("bootstrap {table} request failed: {error}"))
+        })?;
 
         let body = read_success_body(response, table).await?;
         let page = serde_json::from_str::<Vec<T>>(&body).map_err(|error| {
@@ -423,7 +434,9 @@ async fn read_success_body(
 ) -> Result<String, AppError> {
     let status = response.status();
     let body = response.text().await.map_err(|error| {
-        bootstrap_pull_error(format!("bootstrap {endpoint_label} response read failed: {error}"))
+        bootstrap_pull_error(format!(
+            "bootstrap {endpoint_label} response read failed: {error}"
+        ))
     })?;
 
     if !status.is_success() {
@@ -440,7 +453,9 @@ fn build_http_client() -> Result<reqwest::Client, AppError> {
     reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(SYNC_HTTP_TIMEOUT_SECS))
         .build()
-        .map_err(|error| bootstrap_pull_error(format!("bootstrap http client build failed: {error}")))
+        .map_err(|error| {
+            bootstrap_pull_error(format!("bootstrap http client build failed: {error}"))
+        })
 }
 
 fn bootstrap_store_error(message: String) -> AppError {
