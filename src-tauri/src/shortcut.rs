@@ -2,12 +2,14 @@ use crate::errors::{AppError, AppErrorCode};
 use crate::llm::{self, SelectedTextState, TransformCaptureMetadata};
 use crate::selection;
 use crate::settings::SettingsState;
+use crate::tray;
 use serde::Serialize;
 use std::sync::Mutex;
 use tauri::{AppHandle, Emitter, Manager};
 use tauri_plugin_global_shortcut::{Code, GlobalShortcutExt, Modifiers, Shortcut, ShortcutState};
 
 pub const DEFAULT_SHORTCUT_LABEL: &str = "Ctrl+Shift+X";
+pub const DEFAULT_CLOSE_SHORTCUT_LABEL: &str = "Escape";
 const CAPTURE_EVENT: &str = "lexi:capture";
 
 pub struct ShortcutRegistrationState {
@@ -117,7 +119,7 @@ pub fn setup(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error>> {
                 .lock()
                 .expect("shortcut registration state poisoned") = Some(error.clone());
 
-            show_popup(app.handle());
+            tray::show_main_window(app.handle());
             let _ = app.handle().emit(
                 CAPTURE_EVENT,
                 CaptureEvent::Failed {
@@ -164,7 +166,12 @@ pub fn update_registered_shortcut(
 }
 
 pub fn normalize_shortcut_label(input: &str) -> Result<String, AppError> {
-    let parsed = parse_shortcut_parts(input)?;
+    let parsed = parse_shortcut_parts(input, true)?;
+    Ok(parsed.label)
+}
+
+pub fn normalize_close_shortcut_label(input: &str) -> Result<String, AppError> {
+    let parsed = parse_shortcut_parts(input, false)?;
     Ok(parsed.label)
 }
 
@@ -195,7 +202,7 @@ fn register_shortcut(app: &AppHandle, shortcut_label: &str) -> Result<(), AppErr
 }
 
 fn parse_shortcut(input: &str) -> Result<Shortcut, AppError> {
-    let parsed = parse_shortcut_parts(input)?;
+    let parsed = parse_shortcut_parts(input, true)?;
     Ok(Shortcut::new(Some(parsed.modifiers), parsed.code))
 }
 
@@ -205,7 +212,7 @@ struct ParsedShortcut {
     code: Code,
 }
 
-fn parse_shortcut_parts(input: &str) -> Result<ParsedShortcut, AppError> {
+fn parse_shortcut_parts(input: &str, require_modifier: bool) -> Result<ParsedShortcut, AppError> {
     let mut modifiers = Modifiers::empty();
     let mut labels = Vec::new();
     let mut key: Option<KeySpec> = None;
@@ -250,7 +257,7 @@ fn parse_shortcut_parts(input: &str) -> Result<ParsedShortcut, AppError> {
     };
 
     modifiers |= key.implied_modifiers;
-    if modifiers.is_empty() {
+    if require_modifier && modifiers.is_empty() {
         return Err(invalid_shortcut(input, "shortcut must include a modifier"));
     }
     labels.push(key.label);
@@ -349,6 +356,7 @@ fn code_for_key(token: &str) -> Option<KeySpec> {
         "TAB" => ("Tab".to_string(), Code::Tab, Modifiers::empty()),
         "ENTER" => ("Enter".to_string(), Code::Enter, Modifiers::empty()),
         "BACKSPACE" => ("Backspace".to_string(), Code::Backspace, Modifiers::empty()),
+        "ESC" | "ESCAPE" => ("Escape".to_string(), Code::Escape, Modifiers::empty()),
         "F1" => plain_key("F1", Code::F1),
         "F2" => plain_key("F2", Code::F2),
         "F3" => plain_key("F3", Code::F3),
@@ -414,7 +422,7 @@ fn start_capture(app: AppHandle, shortcut_label: String) {
                     multiline,
                 };
 
-                show_popup(&app);
+                tray::show_main_window(&app);
                 let _ = app.emit(CAPTURE_EVENT, event.clone());
                 llm::start_transform_stream(
                     app.clone(),
@@ -444,7 +452,7 @@ fn start_capture(app: AppHandle, shortcut_label: String) {
             }
         };
 
-        show_popup(&app);
+        tray::show_main_window(&app);
         let _ = app.emit(CAPTURE_EVENT, event);
     });
 }
@@ -461,17 +469,12 @@ fn clipboard_owner_hwnd(_app: &AppHandle) -> Option<isize> {
     None
 }
 
-fn show_popup(app: &AppHandle) {
-    if let Some(window) = app.get_webview_window("main") {
-        let _ = window.show();
-        let _ = window.unminimize();
-        let _ = window.set_focus();
-    }
-}
-
 #[cfg(test)]
 mod tests {
-    use super::{normalize_shortcut_label, CaptureEvent, DEFAULT_SHORTCUT_LABEL};
+    use super::{
+        normalize_close_shortcut_label, normalize_shortcut_label, CaptureEvent,
+        DEFAULT_CLOSE_SHORTCUT_LABEL, DEFAULT_SHORTCUT_LABEL,
+    };
     use crate::errors::{AppError, AppErrorCode};
     use serde_json::json;
 
@@ -549,5 +552,13 @@ mod tests {
 
         assert_eq!(error.code, AppErrorCode::ShortcutRegistrationFailed);
         assert!(error.diagnostic_message.contains("modifier"));
+    }
+
+    #[test]
+    fn normalizes_close_shortcut_without_modifier() {
+        assert_eq!(
+            normalize_close_shortcut_label("esc").expect("close shortcut should parse"),
+            DEFAULT_CLOSE_SHORTCUT_LABEL
+        );
     }
 }

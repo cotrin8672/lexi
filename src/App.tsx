@@ -73,6 +73,7 @@ type ResultMode = "word-study" | "text-translation";
 
 type ProviderSettings = {
   shortcut: string;
+  closeShortcut?: string;
   backgroundOpacity: number;
   provider: ProviderKind;
   model: string;
@@ -84,6 +85,7 @@ type ProviderSettings = {
 
 type ProviderSettingsUpdate = {
   shortcut: string;
+  closeShortcut: string;
   backgroundOpacity: number;
   provider: ProviderKind;
   model: string;
@@ -172,6 +174,8 @@ const RESULT_LANGUAGE_OPTIONS = [
   { value: "zh", label: "中文" },
 ] as const;
 
+const DEFAULT_CLOSE_SHORTCUT = "Escape";
+
 export type PopupState =
   | { kind: "idle"; shortcut: string }
   | { kind: "capturing"; shortcut: string }
@@ -246,7 +250,16 @@ function App() {
   }
 
   async function closePopup() {
-    await getCurrentWindow().hide();
+    await invoke("hide_main_window");
+  }
+
+  function startWindowDrag(event: MouseEvent) {
+    if (event.button !== 0) {
+      return;
+    }
+
+    event.preventDefault();
+    void getCurrentWindow().startDragging().catch(() => undefined);
   }
 
   function retryCurrent() {
@@ -367,7 +380,8 @@ function App() {
             headword:
               payload.provider === "deep-l" ? "" : payload.selectedTextPreview,
           },
-          mode: payload.provider === "deep-l" ? "text-translation" : "word-study",
+          mode:
+            payload.provider === "deep-l" ? "text-translation" : "word-study",
           sourceText: payload.selectedText ?? null,
           phase: "requesting",
         });
@@ -445,7 +459,13 @@ function App() {
         return;
       }
 
-      if (event.key === "Escape") {
+      if (isShortcutRecorderTarget(event.target)) {
+        return;
+      }
+
+      const closeShortcut =
+        providerSettings()?.closeShortcut ?? DEFAULT_CLOSE_SHORTCUT;
+      if (matchesShortcutEvent(event, closeShortcut)) {
         event.preventDefault();
         void closePopup();
         return;
@@ -462,12 +482,12 @@ function App() {
       }
     };
 
-    window.addEventListener("keydown", keyHandler);
+    window.addEventListener("keydown", keyHandler, { capture: true });
 
     onCleanup(() => {
       cleanupCapture?.();
       cleanupTransform?.();
-      window.removeEventListener("keydown", keyHandler);
+      window.removeEventListener("keydown", keyHandler, { capture: true });
     });
   });
 
@@ -497,6 +517,7 @@ function App() {
         setSettingsOpen(false);
       }}
       onSetResultTab={setActiveResultTab}
+      onStartWindowDrag={startWindowDrag}
     />
   );
 }
@@ -515,6 +536,7 @@ export function PopupView(props: {
   onSetBackgroundOpacity?: (opacity: number) => void;
   onSaveSettings: (update: ProviderSettingsUpdate) => Promise<void>;
   onSetResultTab: (tab: ResultTab) => void;
+  onStartWindowDrag: (event: MouseEvent) => void;
 }) {
   const backgroundOpacity = () => props.backgroundOpacity ?? 0.94;
   const setBackgroundOpacity = (opacity: number) =>
@@ -526,6 +548,12 @@ export function PopupView(props: {
       style={{ "--background-opacity": backgroundOpacity().toFixed(2) }}
     >
       <header class="lexi-header">
+        <div
+          class="window-drag-strip"
+          data-tauri-drag-region=""
+          aria-hidden="true"
+          onMouseDown={props.onStartWindowDrag}
+        />
         <div class="title-block">
           <h1 class="headword">{headwordForState(props.state)}</h1>
           <InflectionLine
@@ -642,6 +670,9 @@ function SettingsPanel(props: {
     props.settings.provider,
   );
   const [shortcut, setShortcut] = createSignal(props.settings.shortcut);
+  const [closeShortcut, setCloseShortcut] = createSignal(
+    props.settings.closeShortcut ?? DEFAULT_CLOSE_SHORTCUT,
+  );
   const [model, setModel] = createSignal(props.settings.model);
   const [resultLanguage, setResultLanguage] = createSignal(
     props.settings.resultLanguage,
@@ -659,6 +690,10 @@ function SettingsPanel(props: {
   const [recordingShortcut, setRecordingShortcut] = createSignal(false);
   const [recordingShortcutPreview, setRecordingShortcutPreview] =
     createSignal("");
+  const [recordingCloseShortcut, setRecordingCloseShortcut] =
+    createSignal(false);
+  const [recordingCloseShortcutPreview, setRecordingCloseShortcutPreview] =
+    createSignal("");
   const [saving, setSaving] = createSignal(false);
   const [error, setError] = createSignal<string | null>(null);
   let modelLoadSequence = 0;
@@ -666,6 +701,8 @@ function SettingsPanel(props: {
     () =>
       provider() !== props.settings.provider ||
       shortcut().trim() !== props.settings.shortcut ||
+      closeShortcut().trim() !==
+        (props.settings.closeShortcut ?? DEFAULT_CLOSE_SHORTCUT) ||
       props.backgroundOpacity !== props.settings.backgroundOpacity ||
       model().trim() !== props.settings.model ||
       resultLanguage().trim() !== props.settings.resultLanguage ||
@@ -736,6 +773,7 @@ function SettingsPanel(props: {
     try {
       await props.onSave({
         shortcut: shortcut().trim(),
+        closeShortcut: closeShortcut().trim(),
         backgroundOpacity: props.backgroundOpacity,
         provider: provider(),
         model: model().trim(),
@@ -792,9 +830,7 @@ function SettingsPanel(props: {
               step="0.05"
               value={props.backgroundOpacity}
               onInput={(event) =>
-                props.onSetBackgroundOpacity(
-                  Number(event.currentTarget.value),
-                )
+                props.onSetBackgroundOpacity(Number(event.currentTarget.value))
               }
             />
             <output>{Math.round(props.backgroundOpacity * 100)}%</output>
@@ -802,9 +838,10 @@ function SettingsPanel(props: {
         </label>
 
         <div class="settings-field">
-          <span>Shortcut</span>
+          <span>Capture shortcut</span>
           <button
             class="button shortcut-recorder"
+            data-shortcut-recorder=""
             type="button"
             aria-pressed={recordingShortcut()}
             onClick={() => {
@@ -829,7 +866,9 @@ function SettingsPanel(props: {
                 return;
               }
 
-              setRecordingShortcutPreview(shortcutPreviewFromKeyboardEvent(event));
+              setRecordingShortcutPreview(
+                shortcutPreviewFromKeyboardEvent(event),
+              );
               const nextShortcut = shortcutFromKeyboardEvent(event);
               if (nextShortcut) {
                 setShortcut(nextShortcut);
@@ -839,7 +878,9 @@ function SettingsPanel(props: {
             }}
             onKeyUp={(event) => {
               if (recordingShortcut()) {
-                setRecordingShortcutPreview(shortcutPreviewFromKeyboardEvent(event));
+                setRecordingShortcutPreview(
+                  shortcutPreviewFromKeyboardEvent(event),
+                );
               }
             }}
           >
@@ -850,6 +891,60 @@ function SettingsPanel(props: {
                   : shortcut()
               }
               recording={recordingShortcut()}
+            />
+          </button>
+        </div>
+
+        <div class="settings-field">
+          <span>Close shortcut</span>
+          <button
+            class="button shortcut-recorder"
+            data-shortcut-recorder=""
+            type="button"
+            aria-pressed={recordingCloseShortcut()}
+            onClick={() => {
+              setRecordingCloseShortcut(true);
+              setRecordingCloseShortcutPreview("");
+            }}
+            onBlur={() => {
+              setRecordingCloseShortcut(false);
+              setRecordingCloseShortcutPreview("");
+            }}
+            onKeyDown={(event) => {
+              if (!recordingCloseShortcut()) {
+                return;
+              }
+
+              event.preventDefault();
+              event.stopPropagation();
+
+              setRecordingCloseShortcutPreview(
+                shortcutPreviewFromKeyboardEvent(event),
+              );
+              const nextShortcut = shortcutFromKeyboardEvent(event, {
+                requireModifier: false,
+              });
+              if (nextShortcut) {
+                setCloseShortcut(nextShortcut);
+                setRecordingCloseShortcut(false);
+                setRecordingCloseShortcutPreview("");
+              }
+            }}
+            onKeyUp={(event) => {
+              if (recordingCloseShortcut()) {
+                setRecordingCloseShortcutPreview(
+                  shortcutPreviewFromKeyboardEvent(event),
+                );
+              }
+            }}
+          >
+            <ShortcutKeySequence
+              shortcut={
+                recordingCloseShortcut()
+                  ? recordingCloseShortcutPreview() || "Press shortcut"
+                  : closeShortcut()
+              }
+              recording={recordingCloseShortcut()}
             />
           </button>
         </div>
@@ -995,7 +1090,8 @@ function ResultDisplayView(props: {
           fallback={
             <DictionaryBody
               result={
-                props.state.kind === "ready" && props.state.result.mode === "word-study"
+                props.state.kind === "ready" &&
+                props.state.result.mode === "word-study"
                   ? props.state.result
                   : props.state.kind === "streaming"
                     ? props.state.partial
@@ -1007,7 +1103,9 @@ function ResultDisplayView(props: {
         >
           <LoadingTextTranslationView
             sourceText={
-              props.state.kind === "streaming" ? props.state.sourceText ?? "" : ""
+              props.state.kind === "streaming"
+                ? (props.state.sourceText ?? "")
+                : ""
             }
           />
         </Show>
@@ -1038,10 +1136,7 @@ function LoadingDictionaryView(props: {
   );
 }
 
-function DictionaryBody(props: {
-  result: ResultLike;
-  streaming?: boolean;
-}) {
+function DictionaryBody(props: { result: ResultLike; streaming?: boolean }) {
   return (
     <div class="dictionary-layout" classList={{ streaming: props.streaming }}>
       <Show
@@ -1074,9 +1169,7 @@ function DictionaryBody(props: {
                   </div>
                   <div>
                     <div class="translation-head">
-                      <span class="translation-text">
-                        {translation().text}
-                      </span>
+                      <span class="translation-text">{translation().text}</span>
                     </div>
                     <p class="example">
                       <HighlightedExample
@@ -1212,9 +1305,12 @@ function TranslationSkeletonRow(props: { compact?: boolean }) {
   );
 }
 
-function InflectionLine(props: { headword: string; inflections: Inflection[] }) {
-  const plural = createMemo(() =>
-    props.inflections.find((item) => item.kind === "plural")?.form,
+function InflectionLine(props: {
+  headword: string;
+  inflections: Inflection[];
+}) {
+  const plural = createMemo(
+    () => props.inflections.find((item) => item.kind === "plural")?.form,
   );
   const verbForms = createMemo(() =>
     inflectionVerbForms(props.headword, props.inflections),
@@ -1306,7 +1402,10 @@ function highlightSegments(
     }
 
     if (index > cursor) {
-      segments.push({ text: sentence.slice(cursor, index), highlighted: false });
+      segments.push({
+        text: sentence.slice(cursor, index),
+        highlighted: false,
+      });
     }
     segments.push({ text: sentence.slice(index, end), highlighted: true });
     cursor = end;
@@ -1352,8 +1451,8 @@ function inflectionVerbForms(
     (item) => item.kind === "pastParticiple",
   )?.form;
 
-  return [base, past, pastParticiple].filter(
-    (form): form is string => Boolean(form),
+  return [base, past, pastParticiple].filter((form): form is string =>
+    Boolean(form),
   );
 }
 
@@ -1608,14 +1707,17 @@ function ShortcutKeySequence(props: { shortcut: string; recording: boolean }) {
   );
 }
 
-function shortcutFromKeyboardEvent(event: KeyboardEvent): string | null {
+function shortcutFromKeyboardEvent(
+  event: KeyboardEvent,
+  options: { requireModifier?: boolean } = {},
+): string | null {
   const key = shortcutKeyLabel(event);
   if (!key) {
     return null;
   }
 
   const parts = shortcutModifierLabels(event);
-  if (parts.length === 0) {
+  if ((options.requireModifier ?? true) && parts.length === 0) {
     return null;
   }
 
@@ -1641,6 +1743,9 @@ function shortcutKeyLabel(event: KeyboardEvent): string | null {
   if (key.length === 1 && /^[a-z0-9]$/i.test(key)) {
     return key.toUpperCase();
   }
+  if (key === " ") {
+    return "Space";
+  }
   if (key.length === 1 && key !== "+") {
     return key;
   }
@@ -1648,6 +1753,18 @@ function shortcutKeyLabel(event: KeyboardEvent): string | null {
     return "Plus";
   }
 
+  if (key === "Escape" || key === "Esc") {
+    return "Escape";
+  }
+  if (key === "Tab") {
+    return "Tab";
+  }
+  if (key === "Enter") {
+    return "Enter";
+  }
+  if (key === "Backspace") {
+    return "Backspace";
+  }
   if (/^F([1-9]|1[0-2])$/.test(key)) {
     return key.toUpperCase();
   }
@@ -1673,6 +1790,19 @@ function shortcutModifierLabels(event: KeyboardEvent): string[] {
   return parts;
 }
 
+function matchesShortcutEvent(event: KeyboardEvent, shortcut: string): boolean {
+  return (
+    shortcutFromKeyboardEvent(event, { requireModifier: false }) === shortcut
+  );
+}
+
+function isShortcutRecorderTarget(target: EventTarget | null): boolean {
+  return (
+    target instanceof Element &&
+    Boolean(target.closest("[data-shortcut-recorder]"))
+  );
+}
+
 function isAppError(value: unknown): value is AppError {
   if (typeof value !== "object" || value === null) {
     return false;
@@ -1688,4 +1818,3 @@ function isAppError(value: unknown): value is AppError {
 }
 
 export default App;
-

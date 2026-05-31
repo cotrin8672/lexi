@@ -37,6 +37,8 @@ impl ProviderKind {
 pub struct ProviderSettings {
     #[serde(default = "default_shortcut_setting")]
     pub shortcut: String,
+    #[serde(default = "default_close_shortcut_setting")]
+    pub close_shortcut: String,
     #[serde(default = "default_background_opacity")]
     pub background_opacity: f64,
     pub provider: ProviderKind,
@@ -49,6 +51,7 @@ impl Default for ProviderSettings {
     fn default() -> Self {
         Self {
             shortcut: shortcut::DEFAULT_SHORTCUT_LABEL.to_string(),
+            close_shortcut: shortcut::DEFAULT_CLOSE_SHORTCUT_LABEL.to_string(),
             background_opacity: default_background_opacity(),
             provider: ProviderKind::Gemini,
             model: ProviderKind::Gemini.default_model().to_string(),
@@ -62,6 +65,7 @@ impl Default for ProviderSettings {
 #[serde(rename_all = "camelCase")]
 pub struct ProviderSettingsView {
     pub shortcut: String,
+    pub close_shortcut: String,
     pub background_opacity: f64,
     pub provider: ProviderKind,
     pub model: String,
@@ -75,6 +79,7 @@ pub struct ProviderSettingsView {
 #[serde(rename_all = "camelCase")]
 pub struct ProviderSettingsUpdate {
     pub shortcut: String,
+    pub close_shortcut: String,
     pub background_opacity: f64,
     pub provider: ProviderKind,
     pub model: String,
@@ -151,10 +156,21 @@ impl SettingsState {
         }
 
         let normalized_shortcut = shortcut::normalize_shortcut_label(&update.shortcut)?;
+        let normalized_close_shortcut =
+            shortcut::normalize_close_shortcut_label(&update.close_shortcut)?;
+        if normalized_close_shortcut == normalized_shortcut {
+            return Err(AppError::new(
+                crate::errors::AppErrorCode::ShortcutRegistrationFailed,
+                "Close shortcut must be different from the capture shortcut.",
+                "provider settings rejected matching capture and close shortcuts",
+                false,
+            ));
+        }
         let background_opacity = validate_background_opacity(update.background_opacity)?;
 
         let settings = ProviderSettings {
             shortcut: normalized_shortcut,
+            close_shortcut: normalized_close_shortcut,
             background_opacity,
             provider: update.provider,
             model: model.to_string(),
@@ -219,6 +235,7 @@ fn settings_view(app: &AppHandle, settings: ProviderSettings) -> ProviderSetting
     let deepl_api_key_configured = has_api_key(app, ProviderKind::DeepL);
     ProviderSettingsView {
         shortcut: settings.shortcut,
+        close_shortcut: settings.close_shortcut,
         background_opacity: settings.background_opacity,
         provider: settings.provider,
         model: settings.model,
@@ -295,6 +312,10 @@ fn ensure_parent(path: &PathBuf) -> Result<(), AppError> {
 
 fn default_shortcut_setting() -> String {
     shortcut::DEFAULT_SHORTCUT_LABEL.to_string()
+}
+
+fn default_close_shortcut_setting() -> String {
+    shortcut::DEFAULT_CLOSE_SHORTCUT_LABEL.to_string()
 }
 
 fn default_background_opacity() -> f64 {

@@ -109,6 +109,7 @@ button {
 }
 
 .lexi-header {
+  position: relative;
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
   align-items: start;
@@ -120,6 +121,16 @@ button {
   border-bottom: 0;
   background: linear-gradient(90deg, var(--paper-soft), var(--paper));
   box-shadow: var(--shadow);
+}
+
+.window-drag-strip {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 28px;
+  z-index: 1;
+  cursor: move;
 }
 
 .title-block {
@@ -195,6 +206,8 @@ button {
 }
 
 .header-actions {
+  position: relative;
+  z-index: 2;
   display: flex;
   flex-wrap: wrap;
   justify-content: flex-end;

@@ -603,14 +603,14 @@ describe("PopupView", () => {
     );
 
     expect(root.textContent).toContain("Word provider");
-    expect(root.textContent).toContain("Shortcut");
+    expect(root.textContent).toContain("Capture shortcut");
+    expect(root.textContent).toContain("Close shortcut");
     expect(root.textContent).toContain("Theme");
     expect(root.textContent).toContain("Background opacity");
     expect(root.textContent).toContain("30%");
     expect(root.textContent).toContain("Dark");
     expect(root.textContent).toContain("Gemini");
     expect(root.textContent).toContain("DeepL APIキー");
-    expect(root.textContent).not.toContain("Close");
     expect(
       Array.from(root.querySelectorAll("option")).some(
         (option) => option.value === "deep-l",
@@ -703,6 +703,7 @@ describe("PopupView", () => {
 
     expect(onSaveSettings).toHaveBeenCalledWith({
       shortcut: "Ctrl+Shift+X",
+      closeShortcut: "Escape",
       backgroundOpacity: 0.94,
       provider: "gemini",
       model: "gemini-2.5-flash-lite",
@@ -781,6 +782,75 @@ describe("PopupView", () => {
 
     expect(onSaveSettings).toHaveBeenCalledWith({
       shortcut: "Ctrl+Shift+(",
+      closeShortcut: "Escape",
+      backgroundOpacity: 0.94,
+      provider: "gemini",
+      model: "gemini-2.5-flash-lite",
+      resultLanguage: "ja",
+      promptMode: "word-study",
+      apiKey: null,
+      deeplApiKey: null,
+    });
+
+    root.remove();
+  });
+
+  it("records close shortcut changes without requiring a modifier", async () => {
+    vi.mocked(invoke).mockResolvedValueOnce({
+      provider: "gemini",
+      models: [{ id: "gemini-2.5-flash-lite", label: "Gemini 2.5 Flash-Lite" }],
+      fetched: true,
+      warning: null,
+    });
+    const onSaveSettings = vi.fn(async () => undefined);
+    const root = document.createElement("div");
+    document.body.appendChild(root);
+
+    render(
+      () => (
+        <PopupView
+          state={readyState()}
+          settingsOpen
+          providerSettings={{
+            shortcut: "Ctrl+Shift+X",
+            closeShortcut: "Escape",
+            backgroundOpacity: 0.94,
+            provider: "gemini",
+            model: "gemini-2.5-flash-lite",
+            resultLanguage: "ja",
+            promptMode: "word-study",
+            apiKeyConfigured: true,
+            deeplApiKeyConfigured: false,
+          }}
+          activeResultTab="meaning"
+          themeMode="light"
+          onClose={noop}
+          onRetry={noop}
+          onToggleSettings={noop}
+          onToggleTheme={noop}
+          onSaveSettings={onSaveSettings}
+          onSetResultTab={noop}
+        />
+      ),
+      root,
+    );
+
+    const shortcutButtons = root.querySelectorAll(".shortcut-recorder");
+    const closeShortcutButton = shortcutButtons[1];
+    expect(closeShortcutButton).toBeInstanceOf(HTMLButtonElement);
+    closeShortcutButton.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    closeShortcutButton.dispatchEvent(
+      new KeyboardEvent("keydown", { key: "F9", bubbles: true }),
+    );
+    expect(closeShortcutButton.textContent).toBe("F9");
+    root
+      .querySelector("form")
+      ?.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true }));
+    await Promise.resolve();
+
+    expect(onSaveSettings).toHaveBeenCalledWith({
+      shortcut: "Ctrl+Shift+X",
+      closeShortcut: "F9",
       backgroundOpacity: 0.94,
       provider: "gemini",
       model: "gemini-2.5-flash-lite",
@@ -849,6 +919,7 @@ describe("PopupView", () => {
 
     expect(onSaveSettings).toHaveBeenCalledWith({
       shortcut: "Ctrl+Shift+X",
+      closeShortcut: "Escape",
       backgroundOpacity: 0.6,
       provider: "gemini",
       model: "gemini-2.5-flash-lite",
@@ -924,6 +995,7 @@ describe("PopupView", () => {
 
     expect(onSaveSettings).toHaveBeenCalledWith({
       shortcut: "Ctrl+Shift+X",
+      closeShortcut: "Escape",
       backgroundOpacity: 0.94,
       provider: "gemini",
       model: "gemini-2.5-flash",
