@@ -1,4 +1,4 @@
-﻿import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createSignal } from "solid-js";
 import { render } from "solid-js/web";
 import { invoke } from "@tauri-apps/api/core";
@@ -18,6 +18,10 @@ const tauriMocks = vi.hoisted(() => ({
   invoke: vi.fn(),
   listen: vi.fn(),
   hide: vi.fn(),
+  setMinSize: vi.fn(),
+  setSize: vi.fn(),
+  center: vi.fn(),
+  show: vi.fn(),
   listeners: {} as Record<string, Array<(event: { payload: unknown }) => void>>,
 }));
 
@@ -30,13 +34,37 @@ vi.mock("@tauri-apps/api/event", () => ({
 }));
 
 vi.mock("@tauri-apps/api/window", () => ({
-  getCurrentWindow: () => ({ hide: tauriMocks.hide }),
+  LogicalSize: class LogicalSize {
+    width: number;
+    height: number;
+
+    constructor(width: number, height: number) {
+      this.width = width;
+      this.height = height;
+    }
+  },
+  getCurrentWindow: () => ({
+    hide: tauriMocks.hide,
+    setMinSize: tauriMocks.setMinSize,
+    setSize: tauriMocks.setSize,
+    center: tauriMocks.center,
+    show: tauriMocks.show,
+    startDragging: vi.fn(async () => undefined),
+  }),
+}));
+
+vi.mock("@tauri-apps/plugin-opener", () => ({
+  openUrl: vi.fn(async () => undefined),
 }));
 
 beforeEach(() => {
   tauriMocks.invoke.mockReset();
   tauriMocks.listen.mockReset();
   tauriMocks.hide.mockReset();
+  tauriMocks.setMinSize.mockReset();
+  tauriMocks.setSize.mockReset();
+  tauriMocks.center.mockReset();
+  tauriMocks.show.mockReset();
   tauriMocks.listeners = {};
   tauriMocks.listen.mockImplementation(
     (event: string, handler: (event: { payload: unknown }) => void) => {
@@ -61,6 +89,13 @@ function renderPopup(
         state={state}
         settingsOpen={false}
         providerSettings={null}
+        syncAuthStatus={{
+          configured: true,
+          signedIn: true,
+          userId: "user-1",
+          userEmail: "lexi@example.com",
+          callbackUrl: "http://localhost:38271/auth/callback",
+        }}
         activeResultTab={activeResultTab}
         themeMode="light"
         onClose={noop}
@@ -1081,6 +1116,107 @@ describe("Lexi result schema", () => {
 });
 
 describe("App stream flow", () => {
+  it("does not show the normal idle popup while auth status is loading", async () => {
+    vi.mocked(invoke).mockImplementation((command) => {
+      if (command === "get_provider_settings") {
+        return Promise.resolve({
+          shortcut: "Ctrl+Shift+X",
+          backgroundOpacity: 0.94,
+          provider: "gemini",
+          model: "gemini-2.5-flash-lite",
+          resultLanguage: "ja",
+          promptMode: "word-study",
+          apiKeyConfigured: true,
+          deeplApiKeyConfigured: false,
+          supabaseAnonKeyConfigured: true,
+          supabaseCallbackUrl: "http://localhost:38271/auth/callback",
+        });
+      }
+      if (command === "get_shortcut_status") {
+        return Promise.resolve({
+          shortcut: "Ctrl+Shift+X",
+          registered: true,
+          registrationError: null,
+        });
+      }
+      if (command === "get_sync_auth_status") {
+        return new Promise(() => undefined);
+      }
+
+      return Promise.reject(new Error(`unexpected command ${command}`));
+    });
+
+    const root = document.createElement("div");
+    document.body.appendChild(root);
+    render(() => <App />, root);
+    await Promise.resolve();
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(root.textContent).toContain("Googleでログイン");
+    expect(root.textContent).not.toContain("待機中");
+
+    root.remove();
+  });
+
+  it("shows the first-run Google sign-in screen and resizes the window when signed out", async () => {
+    vi.mocked(invoke).mockImplementation((command) => {
+      if (command === "get_provider_settings") {
+        return Promise.resolve({
+          shortcut: "Ctrl+Shift+X",
+          backgroundOpacity: 0.94,
+          provider: "gemini",
+          model: "gemini-2.5-flash-lite",
+          resultLanguage: "ja",
+          promptMode: "word-study",
+          apiKeyConfigured: true,
+          deeplApiKeyConfigured: false,
+          supabaseUrl: "https://project-ref.supabase.co",
+          supabaseAnonKeyConfigured: true,
+          supabaseCallbackUrl: "http://localhost:38271/auth/callback",
+        });
+      }
+      if (command === "get_shortcut_status") {
+        return Promise.resolve({
+          shortcut: "Ctrl+Shift+X",
+          registered: true,
+          registrationError: null,
+        });
+      }
+      if (command === "get_sync_auth_status") {
+        return Promise.resolve({
+          configured: true,
+          signedIn: false,
+          userId: null,
+          userEmail: null,
+          callbackUrl: "http://localhost:38271/auth/callback",
+        });
+      }
+
+      return Promise.reject(new Error(`unexpected command ${command}`));
+    });
+
+    const root = document.createElement("div");
+    document.body.appendChild(root);
+    render(() => <App />, root);
+    await Promise.resolve();
+    await Promise.resolve();
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(root.textContent).toContain("Googleでログイン");
+    expect(root.textContent).not.toContain("Lexiにログイン");
+    expect(root.textContent).not.toContain("Supabaseがアプリ側で設定されていません");
+    expect(root.textContent).not.toContain("待機中");
+    expect(tauriMocks.setSize).toHaveBeenCalledWith(
+      expect.objectContaining({ width: 460, height: 560 }),
+    );
+    expect(tauriMocks.center).toHaveBeenCalled();
+    expect(tauriMocks.show).toHaveBeenCalled();
+
+    root.remove();
+  });
+
   it("retries through the streaming command instead of the non-stream transform path", async () => {
     vi.mocked(invoke).mockImplementation((command) => {
       if (command === "get_provider_settings") {
@@ -1100,6 +1236,15 @@ describe("App stream flow", () => {
           shortcut: "Ctrl+Shift+X",
           registered: true,
           registrationError: null,
+        });
+      }
+      if (command === "get_sync_auth_status") {
+        return Promise.resolve({
+          configured: true,
+          signedIn: true,
+          userId: "user-1",
+          userEmail: "lexi@example.com",
+          callbackUrl: "http://localhost:38271/auth/callback",
         });
       }
       if (command === "run_transform_stream") {

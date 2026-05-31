@@ -6,12 +6,14 @@
   Switch,
   createSignal,
   createMemo,
+  createEffect,
   onCleanup,
   onMount,
 } from "solid-js";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
-import { getCurrentWindow } from "@tauri-apps/api/window";
+import { getCurrentWindow, LogicalSize } from "@tauri-apps/api/window";
+import { openUrl } from "@tauri-apps/plugin-opener";
 import type { AppError } from "./lib/errors";
 import {
   type Idiom,
@@ -81,6 +83,8 @@ type ProviderSettings = {
   promptMode: string;
   apiKeyConfigured: boolean;
   deeplApiKeyConfigured: boolean;
+  supabaseAnonKeyConfigured?: boolean;
+  supabaseCallbackUrl?: string;
 };
 
 type ProviderSettingsUpdate = {
@@ -93,6 +97,21 @@ type ProviderSettingsUpdate = {
   promptMode: string;
   apiKey: string | null;
   deeplApiKey: string | null;
+  supabaseUrl?: string;
+  supabaseAnonKey?: string | null;
+};
+
+type SyncAuthStatus = {
+  configured: boolean;
+  signedIn: boolean;
+  userId: string | null;
+  userEmail: string | null;
+  callbackUrl: string;
+};
+
+type GoogleSignInStart = {
+  authUrl: string;
+  callbackUrl: string;
 };
 
 type LexiPartialResult = {
@@ -175,6 +194,10 @@ const RESULT_LANGUAGE_OPTIONS = [
 ] as const;
 
 const DEFAULT_CLOSE_SHORTCUT = "Escape";
+const POPUP_WINDOW_SIZE = new LogicalSize(400, 700);
+const AUTH_WINDOW_SIZE = new LogicalSize(460, 560);
+const POPUP_MIN_SIZE = new LogicalSize(400, 360);
+const AUTH_MIN_SIZE = new LogicalSize(440, 520);
 
 export type PopupState =
   | { kind: "idle"; shortcut: string }
@@ -211,11 +234,17 @@ function App() {
   const [settingsOpen, setSettingsOpen] = createSignal(false);
   const [providerSettings, setProviderSettings] =
     createSignal<ProviderSettings | null>(null);
+  const [syncAuthStatus, setSyncAuthStatus] =
+    createSignal<SyncAuthStatus | null>(null);
   const [activeResultTab, setActiveResultTab] =
     createSignal<ResultTab>("meaning");
   const [themeMode, setThemeMode] = createSignal<ThemeMode>("light");
   const [backgroundOpacity, setBackgroundOpacity] = createSignal(0.94);
+  const authRequired = createMemo(
+    () => syncAuthStatus() === null || !syncAuthStatus()!.signedIn,
+  );
   let activeRequestId: number | null = null;
+  let windowMode: "auth" | "popup" | null = null;
 
   async function startTransform(shortcut: string, capture: CaptureMetadata) {
     setSettingsOpen(false);
@@ -282,6 +311,48 @@ function App() {
     }
   }
 
+  async function saveProviderSettings(update: ProviderSettingsUpdate) {
+    const saved = await invoke<ProviderSettings>("update_provider_settings", {
+      update,
+    });
+    setProviderSettings(saved);
+    setBackgroundOpacity(saved.backgroundOpacity);
+    setState((current) => ({ ...current, shortcut: saved.shortcut }));
+    return saved;
+  }
+
+  async function startGoogleSignIn() {
+    const started = await invoke<GoogleSignInStart>("start_google_sign_in");
+    await openUrl(started.authUrl);
+  }
+
+  async function signOutSync() {
+    await invoke("sign_out_sync");
+    const status = await invoke<SyncAuthStatus>("get_sync_auth_status");
+    setSyncAuthStatus(status);
+  }
+
+  async function applyWindowMode(requiredAuth: boolean) {
+    const nextMode = requiredAuth ? "auth" : "popup";
+    if (windowMode === nextMode) {
+      return;
+    }
+    windowMode = nextMode;
+
+    const window = getCurrentWindow();
+    if (requiredAuth) {
+      await window.setMinSize(AUTH_MIN_SIZE);
+      await window.setSize(AUTH_WINDOW_SIZE);
+      await window.center();
+      await window.show();
+      return;
+    }
+
+    await window.setMinSize(POPUP_MIN_SIZE);
+    await window.setSize(POPUP_WINDOW_SIZE);
+    await window.center();
+  }
+
   onMount(() => {
     let cleanupCapture: (() => void) | undefined;
     let cleanupTransform: (() => void) | undefined;
@@ -290,6 +361,8 @@ function App() {
       setProviderSettings(settings);
       setBackgroundOpacity(settings.backgroundOpacity);
     });
+
+    void invoke<SyncAuthStatus>("get_sync_auth_status").then(setSyncAuthStatus);
 
     void invoke<ShortcutStatus>("get_shortcut_status").then((status) => {
       if (status.registrationError) {
@@ -454,12 +527,20 @@ function App() {
       cleanupTransform = unlisten;
     });
 
+    void listen<SyncAuthStatus>("lexi:sync-auth", (event) => {
+      setSyncAuthStatus(event.payload);
+    });
+
     const keyHandler = (event: KeyboardEvent) => {
       if (event.defaultPrevented) {
         return;
       }
 
       if (isShortcutRecorderTarget(event.target)) {
+        return;
+      }
+
+      if (authRequired()) {
         return;
       }
 
@@ -491,11 +572,16 @@ function App() {
     });
   });
 
+  createEffect(() => {
+    void applyWindowMode(authRequired()).catch(() => undefined);
+  });
+
   return (
     <PopupView
       state={state()}
       settingsOpen={settingsOpen()}
       providerSettings={providerSettings()}
+      syncAuthStatus={syncAuthStatus()}
       activeResultTab={activeResultTab()}
       themeMode={themeMode()}
       backgroundOpacity={backgroundOpacity()}
@@ -507,15 +593,11 @@ function App() {
       }
       onSetBackgroundOpacity={setBackgroundOpacity}
       onSaveSettings={async (update) => {
-        const saved = await invoke<ProviderSettings>(
-          "update_provider_settings",
-          { update },
-        );
-        setProviderSettings(saved);
-        setBackgroundOpacity(saved.backgroundOpacity);
-        setState((current) => ({ ...current, shortcut: saved.shortcut }));
+        await saveProviderSettings(update);
         setSettingsOpen(false);
       }}
+      onStartGoogleSignIn={startGoogleSignIn}
+      onSignOutSync={signOutSync}
       onSetResultTab={setActiveResultTab}
       onStartWindowDrag={startWindowDrag}
     />
@@ -526,6 +608,7 @@ export function PopupView(props: {
   state: PopupState;
   settingsOpen: boolean;
   providerSettings: ProviderSettings | null;
+  syncAuthStatus?: SyncAuthStatus | null;
   activeResultTab: ResultTab;
   themeMode: ThemeMode;
   backgroundOpacity?: number;
@@ -535,24 +618,31 @@ export function PopupView(props: {
   onToggleTheme: () => void;
   onSetBackgroundOpacity?: (opacity: number) => void;
   onSaveSettings: (update: ProviderSettingsUpdate) => Promise<void>;
+  onStartGoogleSignIn?: () => Promise<void>;
+  onSignOutSync?: () => Promise<void>;
   onSetResultTab: (tab: ResultTab) => void;
-  onStartWindowDrag: (event: MouseEvent) => void;
+  onStartWindowDrag?: (event: MouseEvent) => void;
 }) {
   const backgroundOpacity = () => props.backgroundOpacity ?? 0.94;
   const setBackgroundOpacity = (opacity: number) =>
     props.onSetBackgroundOpacity?.(opacity);
+  const authRequired = () =>
+    props.syncAuthStatus !== undefined &&
+    (props.syncAuthStatus === null || !props.syncAuthStatus.signedIn);
 
   return (
     <main
       class={`popup-shell state-${props.state.kind} theme-${props.themeMode}`}
+      classList={{ "auth-required": authRequired() }}
       style={{ "--background-opacity": backgroundOpacity().toFixed(2) }}
     >
+      <Show when={!authRequired()}>
       <header class="lexi-header">
         <div
           class="window-drag-strip"
           data-tauri-drag-region=""
           aria-hidden="true"
-          onMouseDown={props.onStartWindowDrag}
+            onMouseDown={props.onStartWindowDrag ?? (() => undefined)}
         />
         <div class="title-block">
           <h1 class="headword">{headwordForState(props.state)}</h1>
@@ -585,7 +675,22 @@ export function PopupView(props: {
           </button>
         </div>
       </header>
+      </Show>
 
+      <Show when={authRequired()}>
+        <AuthGate
+          settings={props.providerSettings}
+          syncAuthStatus={props.syncAuthStatus ?? null}
+          onStartGoogleSignIn={props.onStartGoogleSignIn}
+        />
+      </Show>
+
+      <Show
+        when={
+          props.syncAuthStatus === undefined ||
+          props.syncAuthStatus?.signedIn
+        }
+      >
       <section class="lexi-body" aria-live="polite">
         <Switch>
           <Match when={props.state.kind === "idle"}>
@@ -626,6 +731,7 @@ export function PopupView(props: {
           </Match>
         </Switch>
       </section>
+      </Show>
 
       <Show when={props.settingsOpen && props.providerSettings}>
         {(settings) => (
@@ -636,9 +742,11 @@ export function PopupView(props: {
           >
             <SettingsPanel
               settings={settings()}
+              syncAuthStatus={props.syncAuthStatus}
               themeMode={props.themeMode}
               backgroundOpacity={backgroundOpacity()}
               onSave={props.onSaveSettings}
+              onSignOutSync={props.onSignOutSync}
               onToggleTheme={props.onToggleTheme}
               onSetBackgroundOpacity={setBackgroundOpacity}
             />
@@ -646,6 +754,65 @@ export function PopupView(props: {
         )}
       </Show>
     </main>
+  );
+}
+
+function AuthGate(props: {
+  settings: ProviderSettings | null;
+  syncAuthStatus: SyncAuthStatus | null;
+  onStartGoogleSignIn?: () => Promise<void>;
+}) {
+  const [signingIn, setSigningIn] = createSignal(false);
+
+  async function startGoogleSignIn() {
+    setSigningIn(true);
+
+    try {
+      await props.onStartGoogleSignIn?.();
+    } catch {
+      // Keep the first-run screen quiet; configuration failures are not user-actionable here.
+      setSigningIn(false);
+    }
+  }
+
+  return (
+    <section class="auth-gate" aria-label="Googleログイン">
+      <button
+        class="auth-google-button"
+        type="button"
+        disabled={signingIn() || !props.onStartGoogleSignIn}
+        onClick={startGoogleSignIn}
+      >
+        <Show
+          when={signingIn()}
+          fallback={
+            <span class="auth-google-icon" aria-hidden="true">
+              <svg viewBox="0 0 24 24">
+                <path
+                  fill="#4285f4"
+                  d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z"
+                />
+                <path
+                  fill="#34a853"
+                  d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z"
+                />
+                <path
+                  fill="#fbbc05"
+                  d="M5.84 14.1c-.22-.66-.35-1.36-.35-2.1s.13-1.44.35-2.1V7.06H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.94l3.66-2.84z"
+                />
+                <path
+                  fill="#ea4335"
+                  d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.06L5.84 9.9C6.71 7.3 9.14 5.38 12 5.38z"
+                />
+              </svg>
+            </span>
+          }
+        >
+          <span class="auth-spinner" aria-hidden="true" />
+        </Show>
+        {signingIn() ? "ログイン中" : "Googleでログイン"}
+      </button>
+    </section>
   );
 }
 
@@ -660,9 +827,11 @@ function EmptyState(props: { shortcut: string }) {
 
 function SettingsPanel(props: {
   settings: ProviderSettings;
+  syncAuthStatus?: SyncAuthStatus | null;
   themeMode: ThemeMode;
   backgroundOpacity: number;
   onSave: (update: ProviderSettingsUpdate) => Promise<void>;
+  onSignOutSync?: () => Promise<void>;
   onToggleTheme: () => void;
   onSetBackgroundOpacity: (opacity: number) => void;
 }) {
@@ -695,6 +864,7 @@ function SettingsPanel(props: {
   const [recordingCloseShortcutPreview, setRecordingCloseShortcutPreview] =
     createSignal("");
   const [saving, setSaving] = createSignal(false);
+  const [signingIn, setSigningIn] = createSignal(false);
   const [error, setError] = createSignal<string | null>(null);
   let modelLoadSequence = 0;
   const hasChanges = createMemo(
@@ -787,6 +957,19 @@ function SettingsPanel(props: {
       setError(normalizeAppError(caught).userMessage);
     } finally {
       setSaving(false);
+    }
+  }
+
+  async function signOutSync() {
+    setSigningIn(true);
+    setError(null);
+
+    try {
+      await props.onSignOutSync?.();
+    } catch (caught) {
+      setError(normalizeAppError(caught).userMessage);
+    } finally {
+      setSigningIn(false);
     }
   }
 
@@ -1039,6 +1222,39 @@ function SettingsPanel(props: {
             </For>
           </select>
         </label>
+
+        <div class="settings-divider" />
+
+        <div class="settings-field">
+          <span>Google同期</span>
+          <div class="sync-auth-row">
+            <p class="settings-note sync-auth-status">
+              {props.syncAuthStatus?.signedIn
+                ? `ログイン中: ${
+                    props.syncAuthStatus.userEmail ??
+                    props.syncAuthStatus.userId ??
+                    "Supabaseユーザー"
+                  }`
+                : "未ログイン"}
+            </p>
+            <Show when={props.syncAuthStatus?.signedIn}>
+              <button
+                class="button sync-auth-button"
+                type="button"
+                disabled={signingIn() || !props.onSignOutSync}
+                onClick={signOutSync}
+              >
+                ログアウト
+              </button>
+            </Show>
+          </div>
+          <p class="settings-note">
+            コールバック:{" "}
+            {props.settings.supabaseCallbackUrl ??
+              props.syncAuthStatus?.callbackUrl ??
+              "http://localhost:38271/auth/callback"}
+          </p>
+        </div>
 
         <p class="settings-note">
           APIキーは保存後にフロントエンドへ返しません。
