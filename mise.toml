@@ -3,6 +3,10 @@ node = "24"
 pnpm = "latest"
 "npm:@dotenvx/dotenvx" = "latest"
 
+[tasks.default]
+description = "Run the Tauri app with secrets loaded from .env via dotenvx"
+run = "dotenvx run -- pnpm tauri dev"
+
 [tasks.dev]
 description = "Run the Tauri app with secrets loaded from .env via dotenvx"
 run = "dotenvx run -- pnpm tauri dev"

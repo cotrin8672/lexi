@@ -5,6 +5,7 @@ pub mod secrets;
 pub mod selection;
 pub mod settings;
 pub mod shortcut;
+pub mod sync_auth;
 pub mod tray;
 
 use tauri::Manager;
@@ -37,6 +38,9 @@ pub fn run() {
             settings::get_provider_settings,
             settings::update_provider_settings,
             shortcut::get_shortcut_status,
+            sync_auth::get_sync_auth_status,
+            sync_auth::sign_out_sync,
+            sync_auth::start_google_sign_in,
         ])
         .setup(|app| {
             shortcut::setup(app)?;

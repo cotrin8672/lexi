@@ -45,6 +45,12 @@ pub struct ProviderSettings {
     pub model: String,
     pub result_language: String,
     pub prompt_mode: String,
+    #[serde(default)]
+    pub supabase_url: String,
+    #[serde(default)]
+    pub supabase_anon_key: String,
+    #[serde(default = "default_supabase_callback_port")]
+    pub supabase_callback_port: u16,
 }
 
 impl Default for ProviderSettings {
@@ -57,7 +63,39 @@ impl Default for ProviderSettings {
             model: ProviderKind::Gemini.default_model().to_string(),
             result_language: "ja".to_string(),
             prompt_mode: "word-study".to_string(),
+            supabase_url: String::new(),
+            supabase_anon_key: String::new(),
+            supabase_callback_port: default_supabase_callback_port(),
         }
+    }
+}
+
+impl ProviderSettings {
+    pub fn supabase_configured(&self) -> bool {
+        self.supabase_connection().is_some()
+    }
+
+    pub fn supabase_connection(&self) -> Option<(String, String)> {
+        let url = env_setting("SUPABASE_URL")
+            .or_else(|| env_setting("LEXI_SUPABASE_URL"))
+            .unwrap_or_else(|| self.supabase_url.trim().to_string());
+        let anon_key = env_setting("SUPABASE_ANON_KEY")
+            .or_else(|| env_setting("SUPABASE_PUBLISHABLE_KEY"))
+            .or_else(|| env_setting("LEXI_SUPABASE_ANON_KEY"))
+            .unwrap_or_else(|| self.supabase_anon_key.trim().to_string());
+
+        if url.is_empty() || anon_key.is_empty() {
+            return None;
+        }
+
+        Some((url.trim_end_matches('/').to_string(), anon_key))
+    }
+
+    pub fn supabase_callback_url(&self) -> String {
+        format!(
+            "http://localhost:{}/auth/callback",
+            self.supabase_callback_port
+        )
     }
 }
 
@@ -73,6 +111,8 @@ pub struct ProviderSettingsView {
     pub prompt_mode: String,
     pub api_key_configured: bool,
     pub deepl_api_key_configured: bool,
+    pub supabase_anon_key_configured: bool,
+    pub supabase_callback_url: String,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -87,6 +127,9 @@ pub struct ProviderSettingsUpdate {
     pub prompt_mode: String,
     pub api_key: Option<String>,
     pub deepl_api_key: Option<String>,
+    #[serde(default)]
+    pub supabase_url: Option<String>,
+    pub supabase_anon_key: Option<String>,
 }
 
 #[derive(Debug, Default)]
@@ -167,6 +210,18 @@ impl SettingsState {
             ));
         }
         let background_opacity = validate_background_opacity(update.background_opacity)?;
+        let previous_settings = self.load_settings(app)?;
+        let supabase_url = match update.supabase_url.as_deref() {
+            Some(value) => normalize_optional_url(value)?,
+            None => previous_settings.supabase_url,
+        };
+        let supabase_anon_key = update
+            .supabase_anon_key
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(str::to_string)
+            .unwrap_or(previous_settings.supabase_anon_key);
 
         let settings = ProviderSettings {
             shortcut: normalized_shortcut,
@@ -176,6 +231,9 @@ impl SettingsState {
             model: model.to_string(),
             result_language: result_language.to_string(),
             prompt_mode: "word-study".to_string(),
+            supabase_url,
+            supabase_anon_key,
+            supabase_callback_port: previous_settings.supabase_callback_port,
         };
 
         if let Some(api_key) = update.api_key {
@@ -233,6 +291,8 @@ pub fn update_provider_settings(
 fn settings_view(app: &AppHandle, settings: ProviderSettings) -> ProviderSettingsView {
     let api_key_configured = has_api_key(app, settings.provider);
     let deepl_api_key_configured = has_api_key(app, ProviderKind::DeepL);
+    let supabase_anon_key_configured = settings.supabase_connection().is_some();
+    let supabase_callback_url = settings.supabase_callback_url();
     ProviderSettingsView {
         shortcut: settings.shortcut,
         close_shortcut: settings.close_shortcut,
@@ -243,7 +303,16 @@ fn settings_view(app: &AppHandle, settings: ProviderSettings) -> ProviderSetting
         prompt_mode: settings.prompt_mode,
         api_key_configured,
         deepl_api_key_configured,
+        supabase_anon_key_configured,
+        supabase_callback_url,
     }
+}
+
+fn env_setting(name: &str) -> Option<String> {
+    std::env::var(name)
+        .ok()
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
 }
 
 fn read_settings(app: &AppHandle) -> Result<ProviderSettings, AppError> {
@@ -322,6 +391,10 @@ fn default_background_opacity() -> f64 {
     0.94
 }
 
+fn default_supabase_callback_port() -> u16 {
+    38271
+}
+
 fn validate_background_opacity(value: f64) -> Result<f64, AppError> {
     if !value.is_finite() || !(0.0..=1.0).contains(&value) {
         return Err(AppError::new(
@@ -333,4 +406,22 @@ fn validate_background_opacity(value: f64) -> Result<f64, AppError> {
     }
 
     Ok((value * 100.0).round() / 100.0)
+}
+
+fn normalize_optional_url(value: &str) -> Result<String, AppError> {
+    let trimmed = value.trim().trim_end_matches('/').to_string();
+    if trimmed.is_empty() {
+        return Ok(trimmed);
+    }
+
+    if !(trimmed.starts_with("https://") || trimmed.starts_with("http://localhost")) {
+        return Err(AppError::new(
+            crate::errors::AppErrorCode::ProviderNotConfigured,
+            "Supabase URL is invalid.",
+            "Supabase URL must start with https:// or http://localhost.",
+            false,
+        ));
+    }
+
+    Ok(trimmed)
 }

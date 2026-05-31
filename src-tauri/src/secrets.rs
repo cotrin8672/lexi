@@ -1,6 +1,7 @@
 use crate::{errors::AppError, settings::ProviderKind};
 
 const SERVICE_NAME: &str = "io.github.cotrin8672.lexi";
+const SUPABASE_SESSION_USER: &str = "supabase-session";
 
 pub fn write_api_key(provider: ProviderKind, api_key: &str) -> Result<(), AppError> {
     platform::write_secret(&secret_name(provider), provider.secret_user(), api_key)
@@ -24,8 +25,28 @@ pub fn has_api_key(provider: ProviderKind) -> bool {
         .unwrap_or(false)
 }
 
+pub fn write_supabase_session(session_json: &str) -> Result<(), AppError> {
+    platform::write_secret(
+        &named_secret_name(SUPABASE_SESSION_USER),
+        SUPABASE_SESSION_USER,
+        session_json,
+    )
+}
+
+pub fn read_supabase_session() -> Result<Option<String>, AppError> {
+    platform::read_secret(&named_secret_name(SUPABASE_SESSION_USER))
+}
+
+pub fn delete_supabase_session() -> Result<(), AppError> {
+    platform::delete_secret(&named_secret_name(SUPABASE_SESSION_USER))
+}
+
 fn secret_name(provider: ProviderKind) -> String {
-    format!("{SERVICE_NAME}:{}", provider.secret_user())
+    named_secret_name(provider.secret_user())
+}
+
+fn named_secret_name(name: &str) -> String {
+    format!("{SERVICE_NAME}:{name}")
 }
 
 fn read_api_key_from_env(provider: ProviderKind) -> Option<String> {
@@ -105,7 +126,7 @@ mod platform {
     use windows::{
         core::{PCWSTR, PWSTR},
         Win32::Security::Credentials::{
-            CredFree, CredReadW, CredWriteW, CREDENTIALW, CRED_PERSIST_LOCAL_MACHINE,
+            CredDeleteW, CredFree, CredReadW, CredWriteW, CREDENTIALW, CRED_PERSIST_LOCAL_MACHINE,
             CRED_TYPE_GENERIC,
         },
     };
@@ -183,6 +204,26 @@ mod platform {
         secret.map(Some)
     }
 
+    pub fn delete_secret(target_name: &str) -> Result<(), AppError> {
+        let target_name_wide = wide_null(target_name);
+        let result =
+            unsafe { CredDeleteW(PCWSTR(target_name_wide.as_ptr()), CRED_TYPE_GENERIC, 0) };
+
+        if let Err(error) = result {
+            let code = error.code().0 as u32;
+            if code == windows::Win32::Foundation::ERROR_NOT_FOUND.0 {
+                return Ok(());
+            }
+
+            return Err(AppError::provider_request_failed(
+                format!("Windows Credential Manager delete failed: {error}"),
+                true,
+            ));
+        }
+
+        Ok(())
+    }
+
     fn wide_null(value: &str) -> Vec<u16> {
         value.encode_utf16().chain(std::iter::once(0)).collect()
     }
@@ -204,6 +245,13 @@ mod platform {
     }
 
     pub fn read_secret(_target_name: &str) -> Result<Option<String>, AppError> {
+        Err(AppError::provider_request_failed(
+            "OS credential storage is not implemented for this platform",
+            false,
+        ))
+    }
+
+    pub fn delete_secret(_target_name: &str) -> Result<(), AppError> {
         Err(AppError::provider_request_failed(
             "OS credential storage is not implemented for this platform",
             false,
