@@ -722,7 +722,8 @@ Field contract:
   - kind must be exactly "plural", "past", or "pastParticiple".
   - form is the irregular English form only, max 48 characters.
   - Include noun plural only when irregular, for example child -> children or mouse -> mice. Do not include regular plurals like books.
-  - Include verb past and/or past participle only when irregular, for example go -> went/gone or write -> wrote/written. Do not include regular forms like studied/studied.
+  - Include verb past and/or past participle only when irregular, for example go -> went/gone, see -> saw/seen, or write -> wrote/written. Do not include regular forms like studied/studied.
+  - For common irregular verbs, never leave inflections empty when the selected or headword base form clearly has irregular forms; for example see must include saw and seen.
 - translations: dictionary-style Japanese sense entries, not nuance explanations, not a thesaurus, not a list of alternative Japanese renderings, and not a vocabulary expansion list. Return 1 to 3 items only when each item represents a distinct English dictionary sense that should be learned separately.
   - text must be a compact Japanese equivalent or established Japanese expression that can stand as a dictionary meaning entry.
   - Prefer one broad entry when several Japanese words translate the same English sense. Put comma-separated Japanese alternatives in one text value only when that is clearer than choosing one broad equivalent.
@@ -951,19 +952,10 @@ fn lexi_result_schema() -> Value {
                 "minItems": 1,
                 "maxItems": 3,
                 "items": {
-                    "type": "object",
-                    "additionalProperties": false,
-                    "required": ["text", "note", "example", "senseKind", "baseWord"],
-                    "properties": {
-                        "text": { "type": "string" },
-                        "note": translation_note_json_schema(),
-                        "example": { "$ref": "#/$defs/exampleSentence" },
-                        "senseKind": {
-                            "type": ["string", "null"],
-                            "enum": ["dictionary", "inflection", null]
-                        },
-                        "baseWord": { "type": ["string", "null"] }
-                    }
+                    "anyOf": [
+                        { "$ref": "#/$defs/dictionaryTranslation" },
+                        { "$ref": "#/$defs/inflectionTranslation" }
+                    ]
                 }
             },
             "nuance": { "type": "string" },
@@ -979,6 +971,39 @@ fn lexi_result_schema() -> Value {
                 "properties": {
                     "sentence": { "type": "string" },
                     "japanese": { "type": "string" }
+                }
+            },
+            "dictionaryTranslation": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["text", "note", "example", "senseKind", "baseWord"],
+                "properties": {
+                    "text": { "type": "string" },
+                    "note": translation_note_json_schema(),
+                    "example": { "$ref": "#/$defs/exampleSentence" },
+                    "senseKind": {
+                        "type": ["string", "null"],
+                        "enum": ["dictionary", null]
+                    },
+                    "baseWord": {
+                        "type": "null",
+                        "enum": [null]
+                    }
+                }
+            },
+            "inflectionTranslation": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["text", "note", "example", "senseKind", "baseWord"],
+                "properties": {
+                    "text": { "type": "string" },
+                    "note": translation_note_json_schema(),
+                    "example": { "$ref": "#/$defs/exampleSentence" },
+                    "senseKind": {
+                        "type": "string",
+                        "enum": ["inflection"]
+                    },
+                    "baseWord": { "type": "string", "minLength": 1 }
                 }
             },
             "relatedWord": {
@@ -1479,7 +1504,7 @@ fn gemini_lexi_result_schema() -> Value {
                 "maxItems": 3,
                 "items": {
                     "type": "OBJECT",
-                    "required": ["text", "note", "example", "senseKind", "baseWord"],
+                    "required": ["text", "note", "example"],
                     "properties": {
                         "text": { "type": "STRING" },
                         "note": {
@@ -1882,18 +1907,38 @@ mod tests {
             "plural"
         );
         assert_eq!(
-            schema["properties"]["translations"]["items"]["required"][2],
+            schema["$defs"]["dictionaryTranslation"]["required"][2],
             "example"
         );
         assert_eq!(
-            schema["properties"]["translations"]["items"]["properties"]["note"]["enum"][0],
+            schema["$defs"]["dictionaryTranslation"]["properties"]["note"]["enum"][0],
             "名詞"
         );
         assert!(
-            schema["properties"]["translations"]["items"]["properties"]["note"]["enum"]
+            schema["$defs"]["dictionaryTranslation"]["properties"]["note"]["enum"]
                 .as_array()
                 .expect("note enum")
                 .contains(&serde_json::Value::Null)
+        );
+        assert_eq!(
+            schema["properties"]["translations"]["items"]["anyOf"][0]["$ref"],
+            "#/$defs/dictionaryTranslation"
+        );
+        assert_eq!(
+            schema["$defs"]["dictionaryTranslation"]["properties"]["baseWord"]["enum"][0],
+            serde_json::Value::Null
+        );
+        assert_eq!(
+            schema["$defs"]["inflectionTranslation"]["properties"]["senseKind"]["enum"][0],
+            "inflection"
+        );
+        assert_eq!(
+            schema["$defs"]["inflectionTranslation"]["properties"]["baseWord"]["type"],
+            "string"
+        );
+        assert_eq!(
+            schema["$defs"]["inflectionTranslation"]["properties"]["baseWord"]["minLength"],
+            1
         );
         assert_eq!(schema["properties"]["synonyms"]["minItems"], 0);
         assert_eq!(schema["properties"]["synonyms"]["maxItems"], 4);
@@ -1926,6 +1971,10 @@ mod tests {
             schema["properties"]["translations"]["items"]["properties"]["note"]["enum"][0],
             "名詞"
         );
+        assert!(!schema["properties"]["translations"]["items"]["required"]
+            .as_array()
+            .expect("translation required")
+            .contains(&serde_json::Value::String("baseWord".to_string())));
         assert_eq!(schema["properties"]["synonyms"]["minItems"], 0);
         assert_eq!(schema["properties"]["synonyms"]["maxItems"], 4);
         assert_eq!(schema["properties"]["idioms"]["minItems"], 0);
@@ -1953,6 +2002,8 @@ mod tests {
         assert!(prompt.contains("dictionary/base form"));
         assert!(prompt.contains("inflections: 0 to 3"));
         assert!(prompt.contains("Regular forms must be omitted"));
+        assert!(prompt.contains("see -> saw/seen"));
+        assert!(prompt.contains("see must include saw and seen"));
         assert!(prompt.contains("part-of-speech label"));
         assert!(prompt.contains("数学"));
         assert!(prompt.contains("dictionary-style Japanese sense entries"));

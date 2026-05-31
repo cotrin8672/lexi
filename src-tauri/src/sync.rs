@@ -679,30 +679,100 @@ fn parse_pull_response_body(body: &str) -> Result<PullResponse, AppError> {
 #[cfg(test)]
 mod tests {
     use super::{
-        build_mutation_envelope, mark_sync_started_or_request_rerun, parse_mutation_ack_body,
-        parse_pull_response_body, should_record_mutation_failure, supabase_pull_status_error,
-        supabase_push_status_error, sync_failure_user_message, SyncLifecycle, SyncRuntime,
+        build_mutation_envelope, fetch_changes, mark_sync_started_or_request_rerun,
+        parse_mutation_ack_body, parse_pull_response_body, push_mutation,
+        should_record_mutation_failure, supabase_pull_status_error, supabase_push_status_error,
+        sync_failure_user_message, SyncLifecycle, SyncRuntime,
     };
     use crate::errors::{AppError, AppErrorCode};
     use crate::vocabulary::PendingMutation;
-    use std::sync::atomic::Ordering;
+    use std::{
+        io::{Read, Write},
+        net::{TcpListener, TcpStream},
+        sync::atomic::Ordering,
+        thread,
+        time::Duration,
+    };
 
-    #[test]
-    fn builds_mutation_envelope_for_rpc() {
-        let mutation = PendingMutation {
+    fn pending_mutation(operation_id: &str) -> PendingMutation {
+        PendingMutation {
             id: "local-row-1".to_string(),
-            operation_id: "11111111-1111-4111-8111-111111111111".to_string(),
+            operation_id: operation_id.to_string(),
             mutation_type: "save_card_snapshot".to_string(),
             payload_json: serde_json::json!({
                 "canonicalKey": "go",
                 "canonicalText": "go",
                 "resultLanguage": "ja",
-                "schemaVersion": "lexi.word-study.v1",
+                "schemaVersion": "lexi.result.v1",
                 "content": { "headword": "go" }
             })
             .to_string(),
             attempts: 0,
-        };
+        }
+    }
+
+    fn serve_once(status: &str, body: &'static str) -> (String, thread::JoinHandle<String>) {
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind test server");
+        let url = format!("http://{}", listener.local_addr().expect("local addr"));
+        let status = status.to_string();
+        let handle = thread::spawn(move || {
+            let (mut stream, _) = listener.accept().expect("accept test request");
+            read_http_request(&mut stream)
+                .and_then(|request| {
+                    let response = format!(
+                        "HTTP/1.1 {status}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                        body.len()
+                    );
+                    stream.write_all(response.as_bytes()).map(|_| request)
+                })
+                .expect("serve test response")
+        });
+        (url, handle)
+    }
+
+    fn read_http_request(stream: &mut TcpStream) -> std::io::Result<String> {
+        stream.set_read_timeout(Some(Duration::from_secs(2)))?;
+        let mut buffer = Vec::new();
+        let mut chunk = [0_u8; 1024];
+        loop {
+            let read = stream.read(&mut chunk)?;
+            if read == 0 {
+                break;
+            }
+            buffer.extend_from_slice(&chunk[..read]);
+            if let Some(header_end) = find_header_end(&buffer) {
+                let headers = String::from_utf8_lossy(&buffer[..header_end]).to_string();
+                let content_length = headers
+                    .lines()
+                    .find_map(|line| {
+                        let (name, value) = line.split_once(':')?;
+                        name.eq_ignore_ascii_case("content-length")
+                            .then(|| value.trim().parse::<usize>().ok())
+                            .flatten()
+                    })
+                    .unwrap_or(0);
+                let body_start = header_end + 4;
+                let expected = body_start + content_length;
+                while buffer.len() < expected {
+                    let read = stream.read(&mut chunk)?;
+                    if read == 0 {
+                        break;
+                    }
+                    buffer.extend_from_slice(&chunk[..read]);
+                }
+                break;
+            }
+        }
+        Ok(String::from_utf8_lossy(&buffer).to_string())
+    }
+
+    fn find_header_end(buffer: &[u8]) -> Option<usize> {
+        buffer.windows(4).position(|window| window == b"\r\n\r\n")
+    }
+
+    #[test]
+    fn builds_mutation_envelope_for_rpc() {
+        let mutation = pending_mutation("11111111-1111-4111-8111-111111111111");
         let envelope = build_mutation_envelope(&mutation).expect("envelope should build");
 
         assert_eq!(
@@ -732,6 +802,77 @@ mod tests {
         assert_eq!(error.code, crate::errors::AppErrorCode::SyncPushFailed);
         assert!(!error.retryable);
         assert!(error.diagnostic_message.contains("payload parse failed"));
+    }
+
+    #[test]
+    fn push_mutation_posts_rpc_envelope_and_parses_ack() {
+        let operation_id = "11111111-1111-4111-8111-111111111111";
+        let mutation = pending_mutation(operation_id);
+        let body = r#"{
+            "operationId": "11111111-1111-4111-8111-111111111111",
+            "serverRevision": 12,
+            "status": "accepted"
+        }"#;
+        let (url, request) = serve_once("200 OK", body);
+
+        let ack = tauri::async_runtime::block_on(push_mutation(
+            &url,
+            "publishable-key",
+            "access-token",
+            &mutation,
+        ))
+        .expect("push mutation");
+
+        assert_eq!(ack.operation_id, operation_id);
+        assert_eq!(ack.server_revision, 12);
+
+        let request = request.join().expect("request thread");
+        assert!(request.starts_with("POST /rest/v1/rpc/apply_vocabulary_mutation HTTP/1.1"));
+        assert!(request.contains("apikey: publishable-key"));
+        assert!(request.contains("authorization: Bearer access-token"));
+        assert!(request.contains("\"envelope\""));
+        assert!(request.contains("\"operationId\":\"11111111-1111-4111-8111-111111111111\""));
+        assert!(request.contains("\"canonicalKey\":\"go\""));
+    }
+
+    #[test]
+    fn fetch_changes_posts_since_revision_and_batch_limit() {
+        let body = r#"{
+            "changes": [{
+                "serverRevision": 43,
+                "operationId": "22222222-2222-4222-8222-222222222222",
+                "entityType": "card_snapshot",
+                "changeType": "upsert",
+                "payload": {
+                    "canonicalText": "go",
+                    "canonicalKey": "go",
+                    "resultLanguage": "ja",
+                    "schemaVersion": "lexi.result.v1",
+                    "content": { "headword": "go" }
+                }
+            }],
+            "lastRevision": 43
+        }"#;
+        let (url, request) = serve_once("200 OK", body);
+
+        let pull = tauri::async_runtime::block_on(fetch_changes(
+            &url,
+            "publishable-key",
+            "access-token",
+            42,
+            20,
+        ))
+        .expect("fetch changes");
+
+        assert_eq!(pull.changes.len(), 1);
+        assert_eq!(pull.last_revision, 43);
+
+        let request = request.join().expect("request thread");
+        assert!(request.starts_with("POST /rest/v1/rpc/pull_vocabulary_changes HTTP/1.1"));
+        assert!(request.contains("apikey: publishable-key"));
+        assert!(request.contains("authorization: Bearer access-token"));
+        assert!(request.contains("\"since_revision\":42"));
+        assert!(request.contains("\"batch_limit\":20"));
     }
 
     #[test]
@@ -937,6 +1078,117 @@ mod tests {
         assert!(migration.contains("'lexeme_form'"));
         assert!(migration.contains("v_form_id"));
         assert!(!migration.contains("v_lexeme_id,\n        'upsert'"));
+    }
+
+    #[test]
+    fn supabase_user_tables_enable_rls_and_admin_owner_policies() {
+        let schema =
+            include_str!("../../supabase/migrations/202605310001_initial_vocabulary_schema.sql");
+        let user_tables = [
+            "user_lexemes",
+            "lexeme_forms",
+            "card_snapshots",
+            "lookup_events",
+            "vocabulary_mutations",
+            "vocabulary_changes",
+        ];
+
+        for table in user_tables {
+            assert!(
+                schema.contains(&format!("alter table public.{table} enable row level security;")),
+                "{table} should enable RLS"
+            );
+            assert!(
+                schema.contains(&format!("on public.{table}")),
+                "{table} should declare an RLS policy"
+            );
+        }
+
+        let owner_policy = "using (public.lexi_is_admin() and user_id = auth.uid())";
+        let owner_check = "with check (public.lexi_is_admin() and user_id = auth.uid())";
+        assert_eq!(schema.matches(owner_policy).count(), user_tables.len());
+        assert_eq!(schema.matches(owner_check).count(), user_tables.len());
+        assert!(!schema.contains("service_role"));
+    }
+
+    #[test]
+    fn supabase_rpcs_are_security_invoker_and_admin_gated() {
+        let apply_and_pull =
+            include_str!("../../supabase/migrations/202605310005_apply_mutation_ensure_lexeme_forms.sql");
+        let original_pull =
+            include_str!("../../supabase/migrations/202605310002_vocabulary_sync_rpcs.sql");
+        let lookup =
+            include_str!("../../supabase/migrations/202605310003_lookup_vocabulary_card.sql");
+
+        for (name, migration) in [
+            ("apply mutation", apply_and_pull),
+            ("pull changes", original_pull),
+            ("lookup", lookup),
+        ] {
+            assert!(
+                migration.contains("security invoker"),
+                "{name} RPC should not bypass RLS"
+            );
+            assert!(
+                !migration.contains("security definer"),
+                "{name} RPC should not be security definer"
+            );
+            assert!(
+                migration.contains("v_user_id uuid := auth.uid()"),
+                "{name} RPC should bind to auth.uid()"
+            );
+            assert!(
+                migration.contains("if v_user_id is null then"),
+                "{name} RPC should reject anonymous calls"
+            );
+            assert!(
+                migration.contains("if not public.lexi_is_admin() then"),
+                "{name} RPC should require admin app_metadata"
+            );
+        }
+
+        assert!(original_pull.contains(
+            "grant execute on function public.apply_vocabulary_mutation(jsonb) to authenticated"
+        ));
+        assert!(original_pull.contains(
+            "grant execute on function public.pull_vocabulary_changes(bigint, integer) to authenticated"
+        ));
+        assert!(lookup.contains(
+            "grant execute on function public.lookup_vocabulary_card(text, text, text) to authenticated"
+        ));
+    }
+
+    #[test]
+    fn apply_mutation_rpc_checks_idempotency_before_writes() {
+        let migration = include_str!(
+            "../../supabase/migrations/202605310005_apply_mutation_ensure_lexeme_forms.sql"
+        );
+        let existing_lookup = migration
+            .find("select vm.server_revision, vm.status")
+            .expect("existing mutation lookup");
+        let first_user_write = migration
+            .find("insert into public.user_lexemes")
+            .expect("first lexeme write");
+        let duplicate_return = migration
+            .find("return jsonb_build_object(")
+            .expect("duplicate return");
+
+        assert!(existing_lookup < duplicate_return);
+        assert!(duplicate_return < first_user_write);
+        assert!(migration.contains("where vm.user_id = v_user_id"));
+        assert!(migration.contains("and vm.operation_id = v_operation_id"));
+    }
+
+    #[test]
+    fn pull_rpc_limits_owner_scoped_revision_stream() {
+        let migration =
+            include_str!("../../supabase/migrations/202605310002_vocabulary_sync_rpcs.sql");
+
+        assert!(migration.contains("where vc.user_id = v_user_id"));
+        assert!(migration.contains("and vc.server_revision > coalesce(since_revision, 0)"));
+        assert!(migration.contains("order by vc.server_revision asc"));
+        assert!(migration.contains("limit batch_limit"));
+        assert!(migration.contains("if batch_limit > 500 then"));
     }
 
     #[test]
