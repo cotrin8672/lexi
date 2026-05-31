@@ -224,12 +224,13 @@ Supabase remains the source of truth. SQLite holds optimistic local projection, 
 Phase 10 sync engine:
 
 - Rust module `sync` pushes pending `mutation_outbox` rows through Supabase RPC `apply_vocabulary_mutation`.
-- Pull uses Supabase RPC `pull_vocabulary_changes` keyed by monotonically increasing `server_revision`.
+- On first sync for a signed-in user, `vocabulary_bootstrap` copies canonical vocabulary tables from Supabase into SQLite.
+- Incremental pull uses Supabase RPC `pull_vocabulary_changes` keyed by monotonically increasing `server_revision`.
 - Background sync starts after app setup, successful Google sign-in, and local vocabulary saves.
 - The frontend listens for `lexi:sync-status` and shows compact sync notes only in settings or auth-adjacent surfaces.
 - Sync payloads exclude raw selected text, prompts, provider raw responses, and credentials.
 
-Reads should normally use SQLite. A stale cache should trigger background pull rather than blocking popup rendering. EJDict reference data is one-way source data: it can be bundled, downloaded, or mirrored into Supabase and then imported into SQLite, but user vocabulary writes must not mutate global dictionary rows.
+Reads should use the local SQLite replica after bootstrap. On first sign-in or when the local replica is incomplete, the backend copies the user's `user_lexemes`, `lexeme_forms`, and active `card_snapshots` from Supabase into SQLite, then continues with incremental `vocabulary_changes` pull. Popup lookup does not call Supabase on every word request. If the local replica has no match, the client falls back to LLM. EJDict reference data is one-way source data: it can be bundled, downloaded, or mirrored into Supabase and then imported into SQLite, but user vocabulary writes must not mutate global dictionary rows.
 
 Inflection handling should treat observed forms as aliases of lexemes instead of independent saved cards. For example, `went` should attach to canonical `go` when that relationship is known. Ambiguous forms such as `saw` may map to multiple candidate lexemes; the model, dictionary lookup, or user selection can choose which candidate to attach for a given card.
 
