@@ -5,7 +5,7 @@
   "designerIntent": "縺薙・JSON繧偵∬ｪ槫ｽ吶Γ繝｢UI繧定ｨｭ險医☆繧九◆繧√・譛ｪ謨ｴ蠖｢繝・・繧ｿ縺ｨ縺励※謇ｱ縺・ゆｸｻ縺ｫ陦ｨ遉ｺ縺吶ｋ蟇ｾ雎｡縺ｯ providerStructuredResponse縲・,
   "popup": {
     "state": "ready",
-    "shortcut": "Ctrl+Shift+X",
+    "shortcut": "Ctrl+E",
     "activeResultTab": "meaning"
   },
   "capture": {
@@ -125,15 +125,15 @@
   "alternateStates": {
     "idle": {
       "state": "idle",
-      "shortcut": "Ctrl+Shift+X"
+      "shortcut": "Ctrl+E"
     },
     "capturing": {
       "state": "capturing",
-      "shortcut": "Ctrl+Shift+X"
+      "shortcut": "Ctrl+E"
     },
     "requesting": {
       "state": "requesting",
-      "shortcut": "Ctrl+Shift+X",
+      "shortcut": "Ctrl+E",
       "capture": {
         "captureMethod": "uia-focused-element",
         "sourceProcess": "zotero.exe",
@@ -144,7 +144,7 @@
     },
     "error": {
       "state": "error",
-      "shortcut": "Ctrl+Shift+X",
+      "shortcut": "Ctrl+E",
       "error": {
         "code": "InvalidModelOutput",
         "userMessage": "邨先棡縺ｮ蠖｢蠑上ｒ遒ｺ隱阪〒縺阪∪縺帙ｓ縺ｧ縺励◆縲・,

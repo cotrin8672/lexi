@@ -47,10 +47,12 @@ Out of scope for the first release:
 - The user can adjust and persist the popup backdrop opacity from the popup settings panel.
 - Model settings are selected from a provider model-list endpoint when an API key is configured, with a small default fallback list when model-list retrieval is unavailable.
 - Result language settings are selected from an embedded dropdown list instead of a free-form text field.
-- Shortcut settings are recorded from an actual key chord, normalized as a `+`-separated accelerator such as `Ctrl+Shift+X`, and re-registered without restarting the app.
+- Shortcut settings are recorded from an actual key chord, normalized as a `+`-separated accelerator such as `Ctrl+E`, and re-registered without restarting the app.
+- The default capture shortcut is `Ctrl+E`. The default pronunciation shortcut is `Ctrl+Shift+P` and works while the popup is focused.
 - Close shortcut settings are recorded from an actual key chord, default to `Escape`, and may omit modifier keys.
 - The user can open settings from a gear button in the popup header.
 - The user can dismiss the popup with the configured close shortcut or the close affordance without quitting the app.
+- Word-study results should expose pronunciation for the displayed headword through a header voice control and a configurable popup-local shortcut (`Ctrl+Shift+P` by default). Pronunciation should use Windows SAPI through the Rust backend and must not send the headword to an external TTS API.
 - Result UI actions such as copy and retry are not shown in the bottom action bar.
 - The app shows actionable errors for unsupported selection source, empty selection, shortcut registration failure, provider failure, and schema validation failure.
 
@@ -93,6 +95,7 @@ Out of scope for the first release:
 - Avoid persistent instructional text in the main popup.
 - Use compact controls and clear state changes rather than decorative panels.
 - For word-study results, keep the headword, nuance, meanings, and related-word details scannable in the resizable popup, with only the card body scrolling when content exceeds available height.
+- The headword header should include a compact voice icon for pronunciation. The icon should remain visible while the headword is shown during word-study streaming and ready states.
 - For errors, show a short user-facing message plus a details affordance when technical information exists.
 
 ## LLM Output Schema

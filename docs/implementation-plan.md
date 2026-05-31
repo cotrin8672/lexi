@@ -141,7 +141,7 @@ Result: The first AI result contract is `lexi.result.v1` with `mode: "word-study
 
 Goal: wire the explicit user action that starts the capture flow.
 
-Implementation status: complete for Phase 3. The Rust backend registers `Ctrl+Shift+X`, captures from the active app before focusing Lexi, opens a hidden compact popup with redacted capture results, emits capture lifecycle events, and reports startup registration conflicts through `ShortcutRegistrationFailed`.
+Implementation status: complete for Phase 3. The Rust backend registers `Ctrl+E`, captures from the active app before focusing Lexi, opens a hidden compact popup with redacted capture results, emits capture lifecycle events, and reports startup registration conflicts through `ShortcutRegistrationFailed`.
 
 Tasks:
 
@@ -150,7 +150,7 @@ Tasks:
   - JS package: `@tauri-apps/plugin-global-shortcut` only if shortcut registration is frontend-owned.
 - Prefer backend-owned registration if it keeps selected-text capture fully native.
 - Add only required permissions to `src-tauri/capabilities/default.json`.
-- Define default shortcut as `Ctrl+Shift+X` on Windows to keep the `Ctrl+Shift+` pattern while avoiding browser `Ctrl+L` selection/focus conflicts.
+- Define default capture shortcut as `Ctrl+E` on Windows.
 - Add shortcut registration, unregister on shutdown, and conflict reporting.
 - Configure a compact popup window:
   - hidden on startup;

@@ -127,6 +127,8 @@ Phase 4 popup state:
 - The popup window opens at a 500 by 620 default size with 360 by 360 minimum constraints and remains resizable. The frontend shell uses responsive constraints and pane-level scrolling so long result text does not clip at narrow widths.
 - The Tauri window enables `transparent`, and the frontend keeps `html`, `body`, `#root`, and the full-window shell free of opaque fills so the popup backdrop can be translucent on supported desktops.
 - During capturing, requesting, and streaming states, the dictionary-card body keeps the final layout visible with skeleton placeholders. Completed nuance, translation, similar-word, and idiom fields are inserted into their final positions with a short fade-in animation.
+- Word-study pronunciation uses Rust-owned Windows SAPI commands (`speak_headword`, `stop_headword_speech`). The backend selects an installed `Language=409` (`en-US`) voice token when available and speaks the displayed headword synchronously on a worker thread. The popup exposes a header voice button and a configurable popup-local pronunciation shortcut (`Ctrl+Shift+P` by default) while the popup is focused. Headword text is not sent to external TTS providers in this flow.
+- Voice selection prefers `en-US` voices and explicitly excludes Japanese voices. If no English voice is installed in Windows, pronunciation cannot be corrected in-app and the user must add an English language pack with speech support.
 
 Temporary PoC binary:
 
