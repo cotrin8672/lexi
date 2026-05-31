@@ -26,6 +26,7 @@ Rust:
 ```text
 src-tauri/src/
   commands.rs
+  dictionary.rs
   errors.rs
   lib.rs
   llm/
@@ -37,6 +38,8 @@ src-tauri/src/
     windows.rs
   settings.rs
   shortcut.rs
+  sync.rs
+  vocabulary.rs
 ```
 
 Frontend:
@@ -320,6 +323,84 @@ Acceptance criteria:
 - Security-sensitive defaults are explicit.
 - The first release can be installed and used without developer tooling.
 
+## Phase 9: Local Vocabulary Store and EJDict Seed
+
+Goal: introduce persistence without making popup reads depend on cloud availability.
+
+Tasks:
+
+- Add a Rust-owned SQLite store for vocabulary data.
+- Add local tables for dictionary entries, lexemes, lexeme forms, card snapshots, lookup events, mutation outbox, and sync state.
+- Import EJDict as global dictionary seed data. Treat EJDict entries as reference data, not user-editable vocabulary rows.
+- Add normalization helpers for lookup keys, including case folding and whitespace normalization.
+- Store word-study results by canonical lexeme rather than by selected surface form.
+- Store observed and inferred forms as lexeme aliases, including selected form, lemma, irregular plural, irregular past, and irregular past participle.
+- Allow ambiguous form aliases to point at multiple candidate lexemes instead of forcing `form_key` to be globally unique.
+- Use EJDict hits as translation candidates and AI prompt context when available.
+- Keep AI responsible for missing nuance, examples, usage comparisons, sense selection, and fallback generation when EJDict has no useful hit.
+- Add Tauri commands only for narrow vocabulary reads and explicit user actions; avoid exposing raw SQL or filesystem access to the frontend.
+
+Acceptance criteria:
+
+- Existing popup reads can display a saved or recently generated card from SQLite without a network call.
+- Looking up an irregular form such as `went` can attach the card to the canonical lexeme `go` when the provider result supplies that relationship.
+- Repeating a lookup for an already-known alias does not create a duplicate saved card.
+- EJDict data can be refreshed or reimported without overwriting user lexeme/card state.
+- Raw selected text, raw prompts, and raw provider responses are not stored in vocabulary tables by default.
+
+## Phase 10: Supabase Cloud Sync
+
+Goal: sync account-backed vocabulary while keeping SQLite as the local cache, read projection, and durable mutation queue.
+
+Design decision:
+
+- Supabase is the cloud source of truth for synchronized user vocabulary.
+- Local SQLite is a read-through cache, local projection, EJDict cache, and durable queue for pending mutations.
+- SQLite-only rows are pending optimistic state until acknowledged by Supabase.
+- The first Supabase deployment is single-user: enable RLS immediately, but allow only the configured owner Supabase Auth user id to read and write vocabulary/sync tables. Keep `user_id default auth.uid()` columns on user-owned rows so later multi-user policies can move to owner-scoped access without a table rewrite.
+
+Tasks:
+
+- Add Supabase schema migrations for dictionary sources, dictionary entries, user lexemes, lexeme forms, card snapshots, lookup events, mutations or change records, and server revisions.
+- Add RLS policies in the same migrations as the tables. The initial policy may be owner-only `for all to authenticated` with both `using` and `with check` pinned to the owner's Supabase Auth user id; do not leave tables exposed without RLS.
+- Add a server-side RPC such as `apply_vocabulary_mutation(payload)` that applies user mutations transactionally.
+- Make the RPC own validation, ownership checks, canonical lexeme deduplication, alias attachment, conflict handling, and server revision assignment.
+- Add local mutation records for operations such as save lookup, save card snapshot, attach alias, favorite, delete, and user note updates.
+- Push pending local mutations asynchronously and retry failed pushes with backoff.
+- Pull Supabase changes by monotonically increasing server revision rather than by client wall-clock timestamps.
+- Update the SQLite projection from acknowledged mutations and pulled revisions.
+- Keep lookup events append-only so repeated pushes are idempotent by client-generated operation IDs.
+- Add conflict policies per entity type instead of one global last-write-wins rule.
+
+Acceptance criteria:
+
+- A local save succeeds immediately while offline and syncs after connectivity returns.
+- A leaked anon/public key cannot read or mutate vocabulary tables without the owner's authenticated JWT.
+- Re-sending the same pending mutation is idempotent.
+- Two devices adding the same canonical lexeme converge to one server lexeme when the canonical key matches.
+- Server revisions prevent pull gaps caused by client clock skew.
+- Deletions use soft-delete/tombstone behavior so they sync across devices.
+- Supabase is never required for basic dictionary lookup or popup rendering when the local cache is warm.
+
+## Phase 11: Sync UX and Account Controls
+
+Goal: make cloud sync understandable and controllable.
+
+Tasks:
+
+- Add sign-in and sign-out states after the local vocabulary store is stable.
+- Show compact sync status only where it affects user action: signed out, pending, failed, or synced.
+- Add manual retry and clear-failed-mutation diagnostics without exposing sensitive payloads.
+- Add retention controls before syncing any context beyond structured vocabulary cards.
+- Add an export path for user vocabulary data.
+
+Acceptance criteria:
+
+- Signed-out use remains fully functional with local SQLite vocabulary.
+- Signing in starts background sync without blocking lookup.
+- Sync failures do not lose local vocabulary changes.
+- The user can distinguish local-only pending data from cloud-synced data.
+
 ## Suggested Build Order
 
 1. Baseline lockfiles and build checks.
@@ -331,6 +412,9 @@ Acceptance criteria:
 7. Real provider integration.
 8. Settings and secret storage.
 9. Release hardening.
+10. Local vocabulary store and EJDict seed.
+11. Supabase cloud sync.
+12. Sync UX and account controls.
 
 This order intentionally delays real LLM integration until capture and UX are proven.
 
@@ -360,6 +444,8 @@ Manual tests:
 - Unsupported source.
 - Provider unavailable.
 - Invalid provider output.
+- Offline vocabulary save and later sync retry.
+- Duplicate alias lookup across canonical and inflected forms.
 
 ## Decisions Needed
 
@@ -369,6 +455,8 @@ Manual tests:
 - Popup placement rule: cursor, active window center, selected-text vicinity when available, or fixed screen edge.
 - Must-support Windows applications for the UI Automation PoC.
 - Fallback behavior when UI Automation fails.
+- Whether Supabase sign-in is optional or required for cloud vocabulary sync.
+- Initial EJDict import path: bundled asset, first-run download, or Supabase mirror plus local cache.
 
 ## Immediate Next Step
 

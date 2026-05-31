@@ -22,6 +22,9 @@ Rust backend:
 - `shortcut`: owns global shortcut registration and event mapping.
 - `llm`: sends typed requests to the configured model provider and validates response shape.
 - `settings`: loads and saves user settings.
+- `dictionary`: imports and queries global dictionary reference data such as EJDict.
+- `vocabulary`: owns local lexeme, alias, card, lookup-event, and sync-projection storage.
+- `sync`: persists local mutations, pushes them to Supabase, and pulls server revisions into SQLite.
 - `tray`: owns the system tray icon, tray menu, and popup re-show behavior.
 - `errors`: defines stable error codes and user-safe diagnostics.
 - `schema`: defines word-study and text-translation result contracts and rejects missing required fields or unknown schema versions.
@@ -62,7 +65,12 @@ Prefer a small command surface:
 - `list_provider_models(provider: ProviderKind) -> ProviderModelsResult`
 - `get_provider_settings() -> ProviderSettingsView`
 - `update_provider_settings(input: ProviderSettingsUpdate) -> ProviderSettingsView`
-  - Includes the configurable capture shortcut, close shortcut, persisted background opacity, provider, model, result language, prompt mode, and optional API key update.
+  - Includes the configurable capture shortcut, close shortcut, persisted background opacity, provider, model, result language, prompt mode, and optional provider API key updates. Supabase connection values are app-owned configuration and are not editable from frontend settings.
+- `get_sync_auth_status() -> SyncAuthStatus`
+- `start_google_sign_in() -> GoogleSignInStart`
+  - Starts a Google OAuth PKCE flow for Supabase Auth using a Rust-owned localhost callback listener at `http://localhost:38271/auth/callback`.
+- `sign_out_sync() -> ()`
+  - Deletes the locally stored Supabase session.
 - `hide_main_window() -> ()`
   - Hides the popup to the tray for close-shortcut and close-button dismissal.
 - `copy_result(input: CopyRequest) -> CopyResult`
@@ -115,6 +123,7 @@ Phase 4 popup state:
 - Phase 5 removes the bottom result action bar. Settings opens from a header gear button and exposes provider, provider-backed model dropdown, embedded result-language dropdown, and API key update fields.
 - The settings panel also exposes shortcut recorders for capture and close actions. Saving settings sends the recorded key chords through the Rust command boundary; the backend validates, normalizes, persists, and re-registers the capture shortcut immediately. If registration fails, the previous registered capture shortcut is restored and the frontend receives a `ShortcutRegistrationFailed` error. The close shortcut is local to the popup and may omit modifier keys.
 - The settings panel also exposes a persisted background opacity slider. It updates a CSS custom property on the popup shell for background fills, borders, and shadows without reducing text or icon opacity, and saves through the Rust-owned settings file.
+- When no Supabase session is stored, the frontend shows a first-run Japanese Google sign-in gate instead of the dictionary popup. The normal idle popup is hidden until auth status is known, and the window is resized to a centered auth layout before opening the browser-based Supabase Google OAuth flow.
 - The popup window opens at a 500 by 620 default size with 360 by 360 minimum constraints and remains resizable. The frontend shell uses responsive constraints and pane-level scrolling so long result text does not clip at narrow widths.
 - The Tauri window enables `transparent`, and the frontend keeps `html`, `body`, `#root`, and the full-window shell free of opaque fills so the popup backdrop can be translucent on supported desktops.
 - During capturing, requesting, and streaming states, the dictionary-card body keeps the final layout visible with skeleton placeholders. Completed nuance, translation, similar-word, and idiom fields are inserted into their final positions with a short fade-in animation.
@@ -172,10 +181,51 @@ Provider responses must be parsed into a versioned Rust struct before frontend r
 
 Text-translation mode is selected by backend heuristics before provider dispatch when the captured text looks sentence-like: newline, sentence punctuation, clause punctuation, or five or more whitespace-delimited tokens. It uses DeepL and wraps the response in `lexi.text-translation.v1` with `translatedText`, optional detected source language, source/translation segments, and warnings. The first implementation emits one full-selection segment; later alignment can split segments without changing the top-level mode.
 
+## Persistence and Sync Architecture
+
+Vocabulary persistence should use Supabase as the cloud source of truth and SQLite as the device-local cache, read projection, EJDict cache, and durable mutation queue. SQLite exists to keep the popup fast and offline-tolerant; Supabase owns account-backed canonical state, cross-device merge rules, RLS, and server revision assignment.
+
+The main local tables are expected to separate:
+
+- global dictionary entries imported from EJDict;
+- user lexemes keyed by canonical text and language;
+- lexeme forms that alias selected or inflected forms to candidate lexemes;
+- AI-generated card snapshots or enrichment records;
+- lookup events;
+- a mutation outbox for pending user changes;
+- a sync state table holding the last acknowledged server revision.
+
+The main Supabase tables are expected to separate:
+
+- global dictionary sources and dictionary entries;
+- user-owned lexemes, forms, cards, and lookup events protected by RLS;
+- accepted mutation or change records with monotonically increasing server revisions.
+
+Initial Supabase access is intentionally single-user. The first migrations should still enable RLS on every exposed vocabulary or sync table, but policies may allow only the owner's current Supabase Auth user id to perform all operations. This keeps personal use simple while preventing leaked anon/public keys or unrelated authenticated users from reading or mutating vocabulary data. Tables should still carry `user_id uuid not null default auth.uid()` so the later multi-user policy can switch to `auth.uid() = user_id` without reshaping stored data. Do not use email addresses, `auth.email()`, user-editable metadata, or app-shipped `service_role` keys for authorization.
+
+The write flow is:
+
+1. Apply the user action to SQLite in a local transaction.
+2. Insert a pending mutation record in the same transaction.
+3. Return optimistic UI success from the local projection.
+4. Push the mutation to a Supabase RPC such as `apply_vocabulary_mutation`.
+5. Let the server validate ownership, merge aliases, deduplicate canonical lexemes, write affected rows transactionally, and issue a server revision.
+6. Mark the local mutation acknowledged and store the returned server revision.
+7. Pull any later revisions and update the SQLite projection.
+
+Reads should normally use SQLite. A stale cache should trigger background pull rather than blocking popup rendering. EJDict reference data is one-way source data: it can be bundled, downloaded, or mirrored into Supabase and then imported into SQLite, but user vocabulary writes must not mutate global dictionary rows.
+
+Inflection handling should treat observed forms as aliases of lexemes instead of independent saved cards. For example, `went` should attach to canonical `go` when that relationship is known. Ambiguous forms such as `saw` may map to multiple candidate lexemes; the model, dictionary lookup, or user selection can choose which candidate to attach for a given card.
+
+AI enrichment should consume dictionary seed data when available. EJDict can provide common Japanese translation candidates and reduce model drift; the model should remain responsible for missing nuance, learner-friendly examples, usage comparisons, and cases where dictionary data is unavailable or too ambiguous.
+
+Do not sync raw selected text, raw prompt bodies, raw provider responses, or credentials by default. Synchronized card data should be the validated structured result, dictionary references, alias metadata, and explicit user state.
+
 ## Security and Privacy
 
 - Redact raw selected text, prompt bodies, provider responses, and credentials from logs.
 - Store non-secret provider settings separately from API key material. API keys are read from dotenvx-injected environment variables first (`GEMINI_API_KEY`, `GOOGLE_API_KEY`, `OPENAI_API_KEY`), then from Windows Credential Manager. The frontend receives only configured/not-configured state.
+- Supabase project URL and anon/public key are app-owned configuration. Runtime lookup checks `SUPABASE_URL` or `LEXI_SUPABASE_URL` for the project URL and `SUPABASE_ANON_KEY`, `SUPABASE_PUBLISHABLE_KEY`, or `LEXI_SUPABASE_ANON_KEY` for the public key before falling back to any existing local app configuration. These values are not returned to the frontend; Supabase OAuth sessions are stored through Windows Credential Manager and are never returned to the frontend beyond configured/not-configured state, signed-in status, user id, email, and callback URL.
 - Keep default CSP non-null before release.
 - Store secrets through an OS-appropriate mechanism when provider configuration is implemented.
 - Avoid remote content in the Tauri webview unless explicitly required.

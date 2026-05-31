@@ -25,6 +25,7 @@ Out of scope for the first release:
 
 - Cross-platform selected-text capture parity.
 - Long-term history, semantic search, or document library features.
+- Cloud vocabulary sync and account-backed persistence.
 - Complex prompt marketplace or multi-agent orchestration.
 - Clipboard mutation without restoration or explicit user action.
 - Background processing of arbitrary windows without explicit shortcut activation.
@@ -228,8 +229,32 @@ Each error should include a stable code, a short user message, and a diagnostic 
 - macOS Accessibility API and Linux selection support.
 - Provider abstraction for multiple LLM vendors.
 - Optional local history with explicit retention controls.
+- Account-backed vocabulary persistence with Supabase as the cloud source of truth and local SQLite as a read cache plus durable mutation queue.
+- EJDict-backed dictionary seed data for common English-Japanese lookup results, with AI used to fill missing nuance, examples, and usage comparisons.
 - Streaming responses.
 - Tray menu and quick mode switching.
+
+## Persistence and Sync Requirements
+
+Future vocabulary persistence should separate dictionary data, user vocabulary state, and lookup events.
+
+- Supabase is the cloud source of truth for account-backed user vocabulary data.
+- Cloud sync uses Google sign-in through Supabase Auth. The desktop app uses a localhost PKCE callback URL, currently `http://localhost:38271/auth/callback`, which must be allow-listed in Supabase Auth URL configuration and in the Google OAuth client.
+- The Supabase project URL and anon/public key are app-owned deployment configuration, not end-user settings. They may be read from environment variables or existing local app configuration but must not be editable from the frontend settings UI.
+- On first launch or after sign-out, the app must block normal popup use behind a minimal Japanese Google sign-in screen and resize the window to an auth-appropriate centered layout. The normal idle popup must not be shown while the app is determining whether auth is required.
+- Local SQLite is a device-local cache, read projection, EJDict cache, and durable mutation queue. It is not a separate source of truth for synchronized data.
+- Normal reads should prefer SQLite so popup lookup and saved-card display do not block on network availability.
+- User writes should update the local projection optimistically and enqueue a durable mutation in the same local transaction. The mutation is applied to Supabase asynchronously.
+- Supabase should acknowledge accepted mutations with a server revision. Devices pull changes by server revision, not by client wall-clock timestamps.
+- Server-side mutation application should own merge, deduplication, alias attachment, and revision assignment.
+- The first cloud-sync deployment is personal-use only. Supabase vocabulary and sync tables must still enable RLS, but the initial policies may allow only the configured owner Supabase Auth user id to perform all operations. This owner-only policy is a temporary simplification, not permission to expose tables without RLS.
+- User-owned Supabase rows should include `user_id uuid not null default auth.uid()` from the first migration so later multi-user access can move to `auth.uid() = user_id` policies without reshaping data.
+- The desktop app must never contain a Supabase `service_role` key. It should use only the public/anon key plus the signed-in user's access token.
+- EJDict entries are global reference data. They may be bundled or cached locally and imported one-way into SQLite; user edits should not modify the global dictionary source.
+- Word-study persistence should store canonical lexemes separately from observed forms so inflected forms such as `went` can resolve to the same saved vocabulary item as `go`.
+- Lexeme forms are aliases, not independent cards. Ambiguous forms may map to multiple candidate lexemes when the English form is not uniquely resolvable.
+- AI-generated card content should be stored as versioned snapshots or enrichment records so later regeneration does not silently erase user state.
+- Raw selected text, raw prompts, and raw provider responses must not be synced by default. Any future context-history sync requires an explicit retention and privacy requirement.
 
 ## Open Questions
 
@@ -238,6 +263,7 @@ Each error should include a stable code, a short user message, and a diagnostic 
 - Whether non-Windows builds need equivalent OS keychain implementations in the first release.
 - Should the popup appear near cursor, near selected text when possible, or at a fixed screen edge?
 - Which applications are must-support targets for the first Windows release?
+- Whether cloud sync should be required for vocabulary persistence or remain an optional signed-in feature.
 
 ## References
 
