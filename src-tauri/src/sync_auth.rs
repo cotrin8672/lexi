@@ -22,6 +22,7 @@ const CALLBACK_PATH: &str = "/auth/callback";
 pub struct SyncAuthStatus {
     pub configured: bool,
     pub signed_in: bool,
+    pub admin: bool,
     pub user_id: Option<String>,
     pub user_email: Option<String>,
     pub callback_url: String,
@@ -47,6 +48,14 @@ struct SupabaseTokenResponse {
 struct SupabaseUser {
     id: String,
     email: Option<String>,
+    #[serde(default)]
+    app_metadata: SupabaseAppMetadata,
+}
+
+#[derive(Debug, Default, Deserialize, Serialize)]
+struct SupabaseAppMetadata {
+    #[serde(default)]
+    admin: bool,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -145,10 +154,12 @@ fn start_callback_listener(
             Ok(session) => {
                 let email = session.user.email.clone();
                 let user_id = session.user.id.clone();
+                let admin = session.user.app_metadata.admin;
                 match store_session(&session) {
                     Ok(()) => SyncAuthStatus {
                         configured: true,
                         signed_in: true,
+                        admin,
                         user_id: Some(user_id),
                         user_email: email,
                         callback_url,
@@ -431,6 +442,7 @@ fn status_from_session(
         Some(session) => SyncAuthStatus {
             configured,
             signed_in: true,
+            admin: session.user.app_metadata.admin,
             user_id: Some(session.user.id),
             user_email: session.user.email,
             callback_url,
@@ -438,6 +450,7 @@ fn status_from_session(
         None => SyncAuthStatus {
             configured,
             signed_in: false,
+            admin: false,
             user_id: None,
             user_email: None,
             callback_url,
@@ -499,7 +512,10 @@ fn now_unix_seconds() -> u64 {
 
 #[cfg(test)]
 mod tests {
-    use super::{build_google_auth_url, parse_callback_query, percent_decode, percent_encode};
+    use super::{
+        build_google_auth_url, parse_callback_query, percent_decode, percent_encode,
+        status_from_session, StoredSupabaseSession, SupabaseTokenResponse,
+    };
 
     #[test]
     fn encodes_callback_url_for_query_param() {
@@ -535,5 +551,53 @@ mod tests {
     #[test]
     fn decodes_plus_as_space() {
         assert_eq!(percent_decode("hello+world"), "hello world");
+    }
+
+    #[test]
+    fn parses_admin_flag_from_supabase_app_metadata() {
+        let raw = r#"{
+            "access_token": "access-token",
+            "refresh_token": "refresh-token",
+            "expires_in": 3600,
+            "token_type": "bearer",
+            "user": {
+                "id": "user-1",
+                "email": "lexi@example.com",
+                "app_metadata": {
+                    "provider": "google",
+                    "admin": true
+                }
+            }
+        }"#;
+
+        let response =
+            serde_json::from_str::<SupabaseTokenResponse>(raw).expect("valid token response");
+
+        assert!(response.user.app_metadata.admin);
+    }
+
+    #[test]
+    fn treats_missing_admin_flag_as_non_admin() {
+        let raw = r#"{
+            "accessToken": "access-token",
+            "refreshToken": "refresh-token",
+            "tokenType": "bearer",
+            "expiresAt": null,
+            "user": {
+                "id": "user-1",
+                "email": "lexi@example.com"
+            }
+        }"#;
+        let session =
+            serde_json::from_str::<StoredSupabaseSession>(raw).expect("valid stored session");
+
+        let status = status_from_session(
+            true,
+            "http://localhost:38271/auth/callback".to_string(),
+            Some(session),
+        );
+
+        assert!(status.signed_in);
+        assert!(!status.admin);
     }
 }

@@ -1,13 +1,14 @@
 use crate::{
     errors::AppError,
-    secrets,
     schema::{
         parse_lexi_result_v1, ExampleSentence, Idiom, Inflection, LexiResult, LexiResultV1,
         RelatedWord, TextTranslationResultV1, Translation, TranslationSegment,
         LEXI_RESULT_V1_SCHEMA_VERSION, LEXI_TEXT_TRANSLATION_V1_SCHEMA_VERSION,
         TRANSLATION_NOTE_VALUES,
     },
+    secrets,
     settings::{ProviderKind, SettingsState},
+    vocabulary,
 };
 use futures_util::StreamExt;
 use serde::{Deserialize, Serialize};
@@ -199,6 +200,8 @@ impl LlmProvider for MockProvider {
                     sentence: "This is a short example from the mock provider.".to_string(),
                     japanese: "これはモックプロバイダーによる短い例文です。".to_string(),
                 },
+                sense_kind: None,
+                base_word: None,
             }],
             nuance: "MockProvider による構造化レスポンスです。".to_string(),
             synonyms: vec![],
@@ -463,6 +466,21 @@ async fn run_transform_stream_for_capture(
         ));
     }
 
+    if let Ok(Some(result)) =
+        vocabulary::load_cached_word_study(&app, &request.selected_text, &settings.result_language)
+    {
+        let _ = app.emit(
+            TRANSFORM_EVENT,
+            TransformEvent::Ready {
+                request_id,
+                result: LexiResult::WordStudy(result),
+                provider: settings.provider,
+                model: settings.model,
+            },
+        );
+        return Ok(());
+    }
+
     if settings.provider == ProviderKind::Mock {
         let result = MockProvider.transform(&request)?;
         let LexiResult::WordStudy(word_result) = result else {
@@ -480,10 +498,17 @@ async fn run_transform_stream_for_capture(
             TRANSFORM_EVENT,
             TransformEvent::Ready {
                 request_id,
-                result: LexiResult::WordStudy(word_result),
+                result: LexiResult::WordStudy(word_result.clone()),
                 provider: settings.provider,
-                model: settings.model,
+                model: settings.model.clone(),
             },
+        );
+        let _ = vocabulary::save_word_study_result(
+            &app,
+            &word_result,
+            settings.provider,
+            &settings.model,
+            &request.selected_text,
         );
         return Ok(());
     }
@@ -517,6 +542,13 @@ async fn run_transform_stream_for_capture(
         },
     );
     let result = parse_lexi_result_v1(&raw_json)?;
+    let _ = vocabulary::save_word_study_result(
+        &app,
+        &result,
+        settings.provider,
+        &settings.model,
+        &request.selected_text,
+    );
     let _ = app.emit(
         TRANSFORM_EVENT,
         TransformEvent::Ready {
@@ -589,8 +621,27 @@ pub async fn run_transform(
         ));
     }
 
+    if let Ok(Some(result)) =
+        vocabulary::load_cached_word_study(&app, &request.selected_text, &settings.result_language)
+    {
+        return Ok(TransformResult {
+            result: LexiResult::WordStudy(result),
+            provider: settings.provider,
+            model: settings.model,
+        });
+    }
+
     if settings.provider == ProviderKind::Mock {
         let result = MockProvider.transform(&request)?;
+        if let LexiResult::WordStudy(word_result) = &result {
+            let _ = vocabulary::save_word_study_result(
+                &app,
+                word_result,
+                settings.provider,
+                &settings.model,
+                &request.selected_text,
+            );
+        }
         return Ok(TransformResult {
             result,
             provider: settings.provider,
@@ -614,6 +665,13 @@ pub async fn run_transform(
         ProviderKind::Mock => unreachable!("mock provider returned above"),
         ProviderKind::DeepL => unreachable!("DeepL text translation returned above"),
     };
+    let _ = vocabulary::save_word_study_result(
+        &app,
+        &result,
+        settings.provider,
+        &settings.model,
+        &request.selected_text,
+    );
 
     Ok(TransformResult {
         result: LexiResult::WordStudy(result),
@@ -631,7 +689,8 @@ Hard requirements:
 - Do not include markdown, prose outside JSON, comments, or code fences.
 - Use resultLanguage "{result_language}" for all explanations and Japanese meaning fields.
 - Keep the result compact enough for a small desktop popup.
-- If the selection is a single inflected word, set headword to its dictionary/base form, not the selected surface form. Examples: went -> go, ran -> run, studied -> study, better -> good.
+- If the selection is a single inflected word with no independent dictionary meaning, set headword to its dictionary/base form, not the selected surface form. Examples: went -> go, ran -> run, playing -> play, studied -> study.
+- If the selected form is also a standalone dictionary word (for example saw as a tool, left as a direction), keep that form as headword and list both dictionary senses and inflection senses in translations.
 - If the selection is a sentence, choose the central word or phrase as headword and normalize that headword to its dictionary/base form when possible.
 - Return inflections only for irregular noun plural forms or irregular verb past/past participle forms. Use an empty inflections array for regular forms, adjectives, adverbs, phrases without a clear headword, or uncertain data.
 - If reliable synonyms are unavailable, use an empty array instead of guessing.
@@ -654,6 +713,9 @@ Field contract:
   - If candidates differ only in wording, kanji/kana style, formality, specificity, or explanation length, keep the broadest common dictionary equivalent and omit the rest.
   - Do not output sentence-like glosses, usage explanations, source-text summaries, or "X after Y" definitions. Put usage feel in nuance instead.
   - note must be null or exactly one part-of-speech label from this list: 名詞, 動詞, 形容詞, 副詞, 前置詞, 接続詞, 代名詞, 助動詞, 冠詞, 間投詞, 句, 成句, 接頭辞, 接尾辞. Do not use semantic domains such as 数学, 数, 比, 専門, or technical field labels in note.
+  - senseKind is null or exactly "dictionary" or "inflection". Omit senseKind for normal dictionary senses.
+  - baseWord is required only when senseKind is "inflection". It must name the base lemma, for example see for saw.
+  - When headword is a standalone word that is also an inflection of another lemma, include one dictionary sense and one inflection sense with senseKind "inflection" and baseWord set to the base lemma.
   - example is required for every translation item and must demonstrate that specific sense.
     - example.sentence: a simple English sentence, max 96 characters. Prefer common daily contexts and do not quote sensitive selected text unless necessary.
     - example.japanese: natural Japanese translation of example.sentence, max 96 characters.
@@ -871,11 +933,16 @@ fn lexi_result_schema() -> Value {
                 "items": {
                     "type": "object",
                     "additionalProperties": false,
-                    "required": ["text", "note", "example"],
+                    "required": ["text", "note", "example", "senseKind", "baseWord"],
                     "properties": {
                         "text": { "type": "string" },
                         "note": translation_note_json_schema(),
-                        "example": { "$ref": "#/$defs/exampleSentence" }
+                        "example": { "$ref": "#/$defs/exampleSentence" },
+                        "senseKind": {
+                            "type": ["string", "null"],
+                            "enum": ["dictionary", "inflection", null]
+                        },
+                        "baseWord": { "type": ["string", "null"] }
                     }
                 }
             },
@@ -1312,9 +1379,12 @@ async fn call_deepl_text_translation(
         ));
     }
 
-    let payload = response.json::<DeepLTranslateResponse>().await.map_err(|error| {
-        AppError::invalid_model_output(format!("DeepL response parse failed: {error}"))
-    })?;
+    let payload = response
+        .json::<DeepLTranslateResponse>()
+        .await
+        .map_err(|error| {
+            AppError::invalid_model_output(format!("DeepL response parse failed: {error}"))
+        })?;
     let translation = payload
         .translations
         .first()
@@ -1389,7 +1459,7 @@ fn gemini_lexi_result_schema() -> Value {
                 "maxItems": 3,
                 "items": {
                     "type": "OBJECT",
-                    "required": ["text", "note", "example"],
+                    "required": ["text", "note", "example", "senseKind", "baseWord"],
                     "properties": {
                         "text": { "type": "STRING" },
                         "note": {
@@ -1397,7 +1467,13 @@ fn gemini_lexi_result_schema() -> Value {
                             "nullable": true,
                             "enum": TRANSLATION_NOTE_VALUES
                         },
-                        "example": gemini_example_sentence_schema()
+                        "example": gemini_example_sentence_schema(),
+                        "senseKind": {
+                            "type": "STRING",
+                            "nullable": true,
+                            "enum": ["dictionary", "inflection"]
+                        },
+                        "baseWord": { "type": "STRING", "nullable": true }
                     }
                 }
             },

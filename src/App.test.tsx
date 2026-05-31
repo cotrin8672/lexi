@@ -349,6 +349,38 @@ describe("PopupView", () => {
     expect(root.querySelector(".plural-icon")).toBeInstanceOf(HTMLElement);
   });
 
+  it("renders inflection translation sense with base word label", () => {
+    const result = mockResult();
+    result.headword = "saw";
+    result.translations = [
+      {
+        text: "のこぎり",
+        note: "名詞",
+        example: {
+          sentence: "He used a saw.",
+          japanese: "彼はのこぎりを使った。",
+        },
+        senseKind: "dictionary",
+      },
+      {
+        text: "見た",
+        note: "動詞",
+        example: {
+          sentence: "I saw him yesterday.",
+          japanese: "私は昨日彼に会った。",
+        },
+        senseKind: "inflection",
+        baseWord: "see",
+      },
+    ];
+
+    const root = renderPopup(readyState(result));
+
+    expect(root.querySelector(".inflection-sense-label")?.textContent).toBe(
+      "see の活用",
+    );
+  });
+
   it("hides optional sections instead of showing skeletons when ready data is empty", () => {
     const result = mockResult();
     result.synonyms = [];
@@ -1107,6 +1139,16 @@ describe("Lexi result schema", () => {
   it("rejects translation entries without examples", () => {
     const result = mockResult();
     result.translations[0].example = null as never;
+
+    expect(validateLexiResultV1(result)).toEqual({
+      ok: false,
+      reason: "translations must be a non-empty array with part-of-speech notes",
+    });
+  });
+
+  it("rejects inflection translation sense without baseWord", () => {
+    const result = mockResult();
+    result.translations[0].senseKind = "inflection";
 
     expect(validateLexiResultV1(result)).toEqual({
       ok: false,

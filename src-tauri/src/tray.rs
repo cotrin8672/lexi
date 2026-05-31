@@ -52,16 +52,15 @@ pub fn show_main_window(app: &AppHandle) {
 }
 
 fn position_window_at_monitor_right_edge(window: &tauri::WebviewWindow) -> tauri::Result<()> {
-    let monitor = window
-        .current_monitor()?
-        .or(window.primary_monitor()?);
+    let monitor = window.current_monitor()?.or(window.primary_monitor()?);
     let Some(monitor) = monitor else {
         return Ok(());
     };
 
     let work_area = monitor.work_area();
     let window_size = window.outer_size()?;
-    let x = work_area.position.x + work_area.size.width as i32 - window_size.width as i32
+    let x = work_area.position.x + work_area.size.width as i32
+        - window_size.width as i32
         - WINDOW_EDGE_MARGIN;
     let y = work_area.position.y + WINDOW_EDGE_MARGIN;
 

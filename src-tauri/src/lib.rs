@@ -7,6 +7,7 @@ pub mod settings;
 pub mod shortcut;
 pub mod sync_auth;
 pub mod tray;
+pub mod vocabulary;
 
 use tauri::Manager;
 

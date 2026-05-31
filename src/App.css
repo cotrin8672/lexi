@@ -374,6 +374,12 @@ button {
   min-width: 0;
 }
 
+.inflection-sense-label {
+  color: var(--ink-muted);
+  font-size: 0.78rem;
+  white-space: nowrap;
+}
+
 .translation-text {
   color: var(--ink-strong);
   font-size: 18px;

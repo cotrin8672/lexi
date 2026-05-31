@@ -255,6 +255,8 @@ Future vocabulary persistence should separate dictionary data, user vocabulary s
 - Lexeme forms are aliases, not independent cards. Ambiguous forms may map to multiple candidate lexemes when the English form is not uniquely resolvable.
 - AI-generated card content should be stored as versioned snapshots or enrichment records so later regeneration does not silently erase user state.
 - Raw selected text, raw prompts, and raw provider responses must not be synced by default. Any future context-history sync requires an explicit retention and privacy requirement.
+- Persistence and cache work must preserve the current popup experience by default. Do not add new primary frontend flows, panels, or persistent status surfaces just to expose sync internals.
+- Sync/cache failures should be surfaced only when they affect the user's current action, preferably through a small transient notification such as a toast. The normal capture, transform, and result-reading flow should continue using local data whenever possible.
 
 ## Open Questions
 

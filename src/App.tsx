@@ -288,7 +288,9 @@ function App() {
     }
 
     event.preventDefault();
-    void getCurrentWindow().startDragging().catch(() => undefined);
+    void getCurrentWindow()
+      .startDragging()
+      .catch(() => undefined);
   }
 
   function retryCurrent() {
@@ -637,44 +639,44 @@ export function PopupView(props: {
       style={{ "--background-opacity": backgroundOpacity().toFixed(2) }}
     >
       <Show when={!authRequired()}>
-      <header class="lexi-header">
-        <div
-          class="window-drag-strip"
-          data-tauri-drag-region=""
-          aria-hidden="true"
+        <header class="lexi-header">
+          <div
+            class="window-drag-strip"
+            data-tauri-drag-region=""
+            aria-hidden="true"
             onMouseDown={props.onStartWindowDrag ?? (() => undefined)}
-        />
-        <div class="title-block">
-          <h1 class="headword">{headwordForState(props.state)}</h1>
-          <InflectionLine
-            headword={headwordForState(props.state)}
-            inflections={inflectionsForState(props.state)}
           />
-        </div>
-        <div class="header-actions">
-          <button
-            class="button icon-button"
-            type="button"
-            aria-label="Settings"
-            aria-expanded={props.settingsOpen}
-            onClick={props.onToggleSettings}
-          >
-            <svg
-              class="settings-icon"
-              aria-hidden="true"
-              viewBox="0 0 24 24"
-              fill="none"
-              stroke="currentColor"
-              stroke-width="2"
-              stroke-linecap="round"
-              stroke-linejoin="round"
+          <div class="title-block">
+            <h1 class="headword">{headwordForState(props.state)}</h1>
+            <InflectionLine
+              headword={headwordForState(props.state)}
+              inflections={inflectionsForState(props.state)}
+            />
+          </div>
+          <div class="header-actions">
+            <button
+              class="button icon-button"
+              type="button"
+              aria-label="Settings"
+              aria-expanded={props.settingsOpen}
+              onClick={props.onToggleSettings}
             >
-              <path d="M12 15.5a3.5 3.5 0 1 0 0-7 3.5 3.5 0 0 0 0 7Z" />
-              <path d="M19.4 15a1.7 1.7 0 0 0 .34 1.88l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.7 1.7 0 0 0-1.88-.34 1.7 1.7 0 0 0-1.03 1.56V21a2 2 0 1 1-4 0v-.09a1.7 1.7 0 0 0-1.03-1.56 1.7 1.7 0 0 0-1.88.34l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06A1.7 1.7 0 0 0 4.6 15a1.7 1.7 0 0 0-1.56-1.03H3a2 2 0 1 1 0-4h.09A1.7 1.7 0 0 0 4.6 9a1.7 1.7 0 0 0-.34-1.88l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.7 1.7 0 0 0 9 4.6a1.7 1.7 0 0 0 1-1.56V3a2 2 0 1 1 4 0v.09a1.7 1.7 0 0 0 1.03 1.56 1.7 1.7 0 0 0 1.88-.34l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06A1.7 1.7 0 0 0 19.4 9c.2.61.79 1 1.42 1H21a2 2 0 1 1 0 4h-.09A1.7 1.7 0 0 0 19.4 15Z" />
-            </svg>
-          </button>
-        </div>
-      </header>
+              <svg
+                class="settings-icon"
+                aria-hidden="true"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="2"
+                stroke-linecap="round"
+                stroke-linejoin="round"
+              >
+                <path d="M12 15.5a3.5 3.5 0 1 0 0-7 3.5 3.5 0 0 0 0 7Z" />
+                <path d="M19.4 15a1.7 1.7 0 0 0 .34 1.88l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.7 1.7 0 0 0-1.88-.34 1.7 1.7 0 0 0-1.03 1.56V21a2 2 0 1 1-4 0v-.09a1.7 1.7 0 0 0-1.03-1.56 1.7 1.7 0 0 0-1.88.34l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06A1.7 1.7 0 0 0 4.6 15a1.7 1.7 0 0 0-1.56-1.03H3a2 2 0 1 1 0-4h.09A1.7 1.7 0 0 0 4.6 9a1.7 1.7 0 0 0-.34-1.88l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.7 1.7 0 0 0 9 4.6a1.7 1.7 0 0 0 1-1.56V3a2 2 0 1 1 4 0v.09a1.7 1.7 0 0 0 1.03 1.56 1.7 1.7 0 0 0 1.88-.34l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06A1.7 1.7 0 0 0 19.4 9c.2.61.79 1 1.42 1H21a2 2 0 1 1 0 4h-.09A1.7 1.7 0 0 0 19.4 15Z" />
+              </svg>
+            </button>
+          </div>
+        </header>
       </Show>
 
       <Show when={authRequired()}>
@@ -687,50 +689,49 @@ export function PopupView(props: {
 
       <Show
         when={
-          props.syncAuthStatus === undefined ||
-          props.syncAuthStatus?.signedIn
+          props.syncAuthStatus === undefined || props.syncAuthStatus?.signedIn
         }
       >
-      <section class="lexi-body" aria-live="polite">
-        <Switch>
-          <Match when={props.state.kind === "idle"}>
-            <EmptyState shortcut={props.state.shortcut} />
-          </Match>
+        <section class="lexi-body" aria-live="polite">
+          <Switch>
+            <Match when={props.state.kind === "idle"}>
+              <EmptyState shortcut={props.state.shortcut} />
+            </Match>
 
-          <Match when={props.state.kind === "capturing"}>
-            <LoadingDictionaryView label="選択テキストを確認中" />
-          </Match>
+            <Match when={props.state.kind === "capturing"}>
+              <LoadingDictionaryView label="選択テキストを確認中" />
+            </Match>
 
-          <Match when={requestingState(props.state)}>
-            {(requesting) => (
-              <LoadingDictionaryView
-                capture={requesting().capture}
-                label="結果を組み立て中"
-              />
-            )}
-          </Match>
+            <Match when={requestingState(props.state)}>
+              {(requesting) => (
+                <LoadingDictionaryView
+                  capture={requesting().capture}
+                  label="結果を組み立て中"
+                />
+              )}
+            </Match>
 
-          <Match when={resultState(props.state)}>
-            {(result) => (
-              <ResultDisplayView
-                state={result()}
-                activeResultTab={props.activeResultTab}
-                onSetResultTab={props.onSetResultTab}
-              />
-            )}
-          </Match>
+            <Match when={resultState(props.state)}>
+              {(result) => (
+                <ResultDisplayView
+                  state={result()}
+                  activeResultTab={props.activeResultTab}
+                  onSetResultTab={props.onSetResultTab}
+                />
+              )}
+            </Match>
 
-          <Match when={errorState(props.state)}>
-            {(failed) => (
-              <ErrorView
-                state={failed()}
-                onRetry={props.onRetry}
-                onClose={props.onClose}
-              />
-            )}
-          </Match>
-        </Switch>
-      </section>
+            <Match when={errorState(props.state)}>
+              {(failed) => (
+                <ErrorView
+                  state={failed()}
+                  onRetry={props.onRetry}
+                  onClose={props.onClose}
+                />
+              )}
+            </Match>
+          </Switch>
+        </section>
       </Show>
 
       <Show when={props.settingsOpen && props.providerSettings}>
@@ -1248,17 +1249,8 @@ function SettingsPanel(props: {
               </button>
             </Show>
           </div>
-          <p class="settings-note">
-            コールバック:{" "}
-            {props.settings.supabaseCallbackUrl ??
-              props.syncAuthStatus?.callbackUrl ??
-              "http://localhost:38271/auth/callback"}
-          </p>
         </div>
 
-        <p class="settings-note">
-          APIキーは保存後にフロントエンドへ返しません。
-        </p>
         <Show when={modelsWarning()}>
           {(message) => <p class="settings-note">{message()}</p>}
         </Show>
@@ -1386,6 +1378,18 @@ function DictionaryBody(props: { result: ResultLike; streaming?: boolean }) {
                   <div>
                     <div class="translation-head">
                       <span class="translation-text">{translation().text}</span>
+                      <Show
+                        when={
+                          translation().senseKind === "inflection" &&
+                          translation().baseWord
+                        }
+                      >
+                        {(baseWord) => (
+                          <span class="inflection-sense-label">
+                            {baseWord()} の活用
+                          </span>
+                        )}
+                      </Show>
                     </div>
                     <p class="example">
                       <HighlightedExample

@@ -339,6 +339,8 @@ Tasks:
 - Use EJDict hits as translation candidates and AI prompt context when available.
 - Keep AI responsible for missing nuance, examples, usage comparisons, sense selection, and fallback generation when EJDict has no useful hit.
 - Add Tauri commands only for narrow vocabulary reads and explicit user actions; avoid exposing raw SQL or filesystem access to the frontend.
+- Keep frontend changes out of the first local persistence pass. Wire cache reads and writes behind the existing Rust transform flow so the popup keeps receiving the current structured result payload.
+- Treat cache misses and sync failures as backend conditions first. Only surface an error when the user's current action needs it, and prefer a compact transient notification over new persistent UI.
 
 Acceptance criteria:
 
@@ -389,7 +391,7 @@ Goal: make cloud sync understandable and controllable.
 Tasks:
 
 - Add sign-in and sign-out states after the local vocabulary store is stable.
-- Show compact sync status only where it affects user action: signed out, pending, failed, or synced.
+- Show compact sync status only where it affects user action. Do not add a persistent sync dashboard or broad frontend workflow for the initial sync pass.
 - Add manual retry and clear-failed-mutation diagnostics without exposing sensitive payloads.
 - Add retention controls before syncing any context beyond structured vocabulary cards.
 - Add an export path for user vocabulary data.
@@ -399,7 +401,7 @@ Acceptance criteria:
 - Signed-out use remains fully functional with local SQLite vocabulary.
 - Signing in starts background sync without blocking lookup.
 - Sync failures do not lose local vocabulary changes.
-- The user can distinguish local-only pending data from cloud-synced data.
+- Actionable sync failures can be noticed without changing the main popup experience.
 
 ## Suggested Build Order
 

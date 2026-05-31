@@ -19,11 +19,14 @@ export const TRANSLATION_NOTE_VALUES = [
 ] as const;
 
 export type TranslationNote = (typeof TRANSLATION_NOTE_VALUES)[number];
+export type TranslationSenseKind = "dictionary" | "inflection";
 
 export interface Translation {
   text: string;
   note: TranslationNote | null;
   example: ExampleSentence;
+  senseKind?: TranslationSenseKind | null;
+  baseWord?: string | null;
 }
 
 export interface ExampleSentence {
@@ -193,16 +196,53 @@ function isStringArray(value: unknown): value is string[] {
   return Array.isArray(value) && value.every((item) => typeof item === "string");
 }
 
+function isTranslationSenseKind(value: unknown): value is TranslationSenseKind {
+  return value === "dictionary" || value === "inflection";
+}
+
 function isTranslationArray(value: unknown): value is Translation[] {
   return (
     Array.isArray(value) &&
-    value.every(
-      (item) =>
-        isRecord(item) &&
-        isNonEmptyString(item.text) &&
-        (isTranslationNote(item.note) || item.note === null) &&
-        isExampleSentence(item.example),
-    )
+    value.every((item) => {
+      if (
+        !isRecord(item) ||
+        !isNonEmptyString(item.text) ||
+        !(isTranslationNote(item.note) || item.note === null) ||
+        !isExampleSentence(item.example)
+      ) {
+        return false;
+      }
+
+      const senseKind = item.senseKind;
+      if (
+        senseKind !== undefined &&
+        senseKind !== null &&
+        !isTranslationSenseKind(senseKind)
+      ) {
+        return false;
+      }
+
+      const baseWord = item.baseWord;
+      if (baseWord !== undefined && baseWord !== null && typeof baseWord !== "string") {
+        return false;
+      }
+
+      if (senseKind === "inflection" && !isNonEmptyString(baseWord)) {
+        return false;
+      }
+
+      if (
+        senseKind !== "inflection" &&
+        baseWord !== undefined &&
+        baseWord !== null &&
+        typeof baseWord === "string" &&
+        baseWord.trim().length > 0
+      ) {
+        return false;
+      }
+
+      return true;
+    })
   );
 }
 

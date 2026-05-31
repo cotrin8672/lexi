@@ -219,6 +219,8 @@ Inflection handling should treat observed forms as aliases of lexemes instead of
 
 AI enrichment should consume dictionary seed data when available. EJDict can provide common Japanese translation candidates and reduce model drift; the model should remain responsible for missing nuance, learner-friendly examples, usage comparisons, and cases where dictionary data is unavailable or too ambiguous.
 
+Persistence should be inserted behind the existing backend-owned transform flow. The Solid frontend should not gain new persistence-specific workflows unless the feature explicitly requires user input. Existing result rendering should receive the same structured result shape whether the data came from a fresh provider response or a SQLite cache hit. Background sync state should not reshape the popup. If sync/cache work fails, the backend should keep serving local data where possible and expose only a compact, transient user notification for actionable failures.
+
 Do not sync raw selected text, raw prompt bodies, raw provider responses, or credentials by default. Synchronized card data should be the validated structured result, dictionary references, alias metadata, and explicit user state.
 
 ## Security and Privacy

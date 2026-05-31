@@ -3,6 +3,8 @@ use serde::{Deserialize, Serialize};
 
 pub const LEXI_RESULT_V1_SCHEMA_VERSION: &str = "lexi.result.v1";
 pub const LEXI_TEXT_TRANSLATION_V1_SCHEMA_VERSION: &str = "lexi.text-translation.v1";
+pub const TRANSLATION_SENSE_KIND_VALUES: &[&str] = &["dictionary", "inflection"];
+
 pub const TRANSLATION_NOTE_VALUES: &[&str] = &[
     "名詞",
     "動詞",
@@ -26,6 +28,10 @@ pub struct Translation {
     pub text: String,
     pub note: Option<String>,
     pub example: ExampleSentence,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sense_kind: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub base_word: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -142,6 +148,7 @@ impl LexiResultV1 {
                 &format!("translations[{index}].example"),
                 &translation.example,
             )?;
+            validate_translation_sense(&format!("translations[{index}]"), translation)?;
         }
 
         for (index, synonym) in self.synonyms.iter().enumerate() {
@@ -190,7 +197,10 @@ impl TextTranslationResultV1 {
 
         for (index, segment) in self.segments.iter().enumerate() {
             validate_required(&format!("segments[{index}].source"), &segment.source)?;
-            validate_required(&format!("segments[{index}].translation"), &segment.translation)?;
+            validate_required(
+                &format!("segments[{index}].translation"),
+                &segment.translation,
+            )?;
             validate_max_chars(&format!("segments[{index}].source"), &segment.source, 1000)?;
             validate_max_chars(
                 &format!("segments[{index}].translation"),
@@ -251,6 +261,30 @@ fn validate_max_chars(field: &str, value: &str, max: usize) -> Result<(), AppErr
     if count > max {
         return Err(AppError::invalid_model_output(format!(
             "field '{field}' has {count} characters, max is {max}"
+        )));
+    }
+
+    Ok(())
+}
+
+fn validate_translation_sense(field: &str, translation: &Translation) -> Result<(), AppError> {
+    let Some(sense_kind) = translation.sense_kind.as_deref() else {
+        return Ok(());
+    };
+
+    if !TRANSLATION_SENSE_KIND_VALUES.contains(&sense_kind) {
+        return Err(AppError::invalid_model_output(format!(
+            "field '{field}.senseKind' must be 'dictionary' or 'inflection'"
+        )));
+    }
+
+    if sense_kind == "inflection" {
+        let base_word = translation.base_word.as_deref().unwrap_or("");
+        validate_required(&format!("{field}.baseWord"), base_word)?;
+        validate_max_chars(&format!("{field}.baseWord"), base_word, 48)?;
+    } else if translation.base_word.is_some() {
+        return Err(AppError::invalid_model_output(format!(
+            "field '{field}.baseWord' is only allowed when senseKind is 'inflection'"
         )));
     }
 
@@ -338,6 +372,8 @@ mod tests {
                     sentence: "She noticed a subtle change in his voice.".to_string(),
                     japanese: "彼女は彼の声の微妙な変化に気づいた。".to_string(),
                 },
+                sense_kind: None,
+                base_word: None,
             }],
             nuance: "Small or delicate enough that it may be hard to notice.".to_string(),
             synonyms: vec![super::RelatedWord {
@@ -468,6 +504,53 @@ mod tests {
         assert!(error
             .diagnostic_message
             .contains("translations[0].example.japanese"));
+    }
+
+    #[test]
+    fn accepts_inflection_translation_sense_with_base_word() {
+        let mut result = valid_result();
+        result.headword = "saw".to_string();
+        result.translations = vec![
+            super::Translation {
+                text: "のこぎり".to_string(),
+                note: Some("名詞".to_string()),
+                example: super::ExampleSentence {
+                    sentence: "He used a saw.".to_string(),
+                    japanese: "彼はのこぎりを使った。".to_string(),
+                },
+                sense_kind: Some("dictionary".to_string()),
+                base_word: None,
+            },
+            super::Translation {
+                text: "見た".to_string(),
+                note: Some("動詞".to_string()),
+                example: super::ExampleSentence {
+                    sentence: "I saw him yesterday.".to_string(),
+                    japanese: "私は昨日彼に会った。".to_string(),
+                },
+                sense_kind: Some("inflection".to_string()),
+                base_word: Some("see".to_string()),
+            },
+        ];
+
+        let result = result
+            .validate()
+            .expect("inflection translation sense should validate");
+
+        assert_eq!(result.translations[1].base_word.as_deref(), Some("see"));
+    }
+
+    #[test]
+    fn rejects_inflection_translation_without_base_word() {
+        let mut result = valid_result();
+        result.translations[0].sense_kind = Some("inflection".to_string());
+
+        let error = result
+            .validate()
+            .expect_err("inflection sense requires baseWord");
+
+        assert_eq!(error.code, AppErrorCode::InvalidModelOutput);
+        assert!(error.diagnostic_message.contains("baseWord"));
     }
 
     #[test]
