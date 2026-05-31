@@ -116,6 +116,14 @@ export function validateLexiResultV1(value: unknown): LexiResultValidation {
     }
   }
 
+  if (charCount(value.headword) > 48) {
+    return { ok: false, reason: "headword exceeds maximum length" };
+  }
+
+  if (charCount(value.nuance) > 120) {
+    return { ok: false, reason: "nuance exceeds maximum length" };
+  }
+
   if (!isTranslationArray(value.translations) || value.translations.length === 0) {
     return {
       ok: false,
@@ -136,6 +144,10 @@ export function validateLexiResultV1(value: unknown): LexiResultValidation {
   }
 
   if (!isStringArray(value.warnings)) {
+    return { ok: false, reason: "warnings must be an array of strings" };
+  }
+
+  if (!areWarningsValid(value.warnings)) {
     return { ok: false, reason: "warnings must be an array of strings" };
   }
 
@@ -173,11 +185,29 @@ function validateTextTranslationResultV1(
     };
   }
 
+  if (
+    typeof value.detectedSourceLanguage === "string" &&
+    charCount(value.detectedSourceLanguage) > 16
+  ) {
+    return {
+      ok: false,
+      reason: "detectedSourceLanguage exceeds maximum length",
+    };
+  }
+
+  if (charCount(String(value.translatedText)) > 4000) {
+    return { ok: false, reason: "translatedText exceeds maximum length" };
+  }
+
   if (!isTranslationSegmentArray(value.segments)) {
     return { ok: false, reason: "segments must be a translation segment array" };
   }
 
   if (!isStringArray(value.warnings)) {
+    return { ok: false, reason: "warnings must be an array of strings" };
+  }
+
+  if (!areWarningsValid(value.warnings)) {
     return { ok: false, reason: "warnings must be an array of strings" };
   }
 
@@ -192,6 +222,19 @@ function isNonEmptyString(value: unknown): value is string {
   return typeof value === "string" && value.trim().length > 0;
 }
 
+function charCount(value: string): number {
+  return Array.from(value).length;
+}
+
+function areWarningsValid(value: unknown): value is string[] {
+  return (
+    Array.isArray(value) &&
+    value.every(
+      (item) => typeof item === "string" && item.trim().length > 0 && charCount(item) <= 120,
+    )
+  );
+}
+
 function isStringArray(value: unknown): value is string[] {
   return Array.isArray(value) && value.every((item) => typeof item === "string");
 }
@@ -203,10 +246,12 @@ function isTranslationSenseKind(value: unknown): value is TranslationSenseKind {
 function isTranslationArray(value: unknown): value is Translation[] {
   return (
     Array.isArray(value) &&
+    value.length <= 3 &&
     value.every((item) => {
       if (
         !isRecord(item) ||
         !isNonEmptyString(item.text) ||
+        charCount(item.text) > 48 ||
         !(isTranslationNote(item.note) || item.note === null) ||
         !isExampleSentence(item.example)
       ) {
@@ -281,6 +326,7 @@ function isInflectionKind(value: unknown): value is InflectionKind {
 function isRelatedWordArray(value: unknown): value is RelatedWord[] {
   return (
     Array.isArray(value) &&
+    value.length <= 4 &&
     value.every(
       (item) =>
         isRecord(item) &&
@@ -308,11 +354,14 @@ function isIdiomArray(value: unknown): value is Idiom[] {
 function isTranslationSegmentArray(value: unknown): value is TranslationSegment[] {
   return (
     Array.isArray(value) &&
+    value.length <= 24 &&
     value.every(
       (item) =>
         isRecord(item) &&
         isNonEmptyString(item.source) &&
-        isNonEmptyString(item.translation),
+        isNonEmptyString(item.translation) &&
+        charCount(item.source) <= 1000 &&
+        charCount(item.translation) <= 1000,
     )
   );
 }
