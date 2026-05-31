@@ -13,11 +13,12 @@ The initial product should optimize for reliability, privacy, and low interrupti
 In scope:
 
 - Windows-first desktop app built with Tauri v2, Rust, SolidJS, TypeScript, and Vite.
+- System tray residency while the app is running.
 - Global shortcut activation.
 - Selected-text acquisition through a native Windows backend pipeline: clipboard-preserving copy first for low latency, then Windows UI Automation where supported.
 - Compact popup UI for loading, result, copy, retry, and error states.
 - Two typed transformation workflows: word study for single words and short phrases, and text translation for sentence-like selections.
-- Local settings for shortcut, provider configuration, model name, API key state, and prompt preset.
+- Local settings for capture shortcut, close shortcut, provider configuration, model name, API key state, and prompt preset.
 - Focused logging that excludes selected text and model payloads.
 
 Out of scope for the first release:
@@ -31,6 +32,8 @@ Out of scope for the first release:
 ## Functional Requirements
 
 - The app registers a configurable global shortcut on startup.
+- The app creates a system tray icon on startup and remains running when the popup window is hidden or closed.
+- Clicking the tray icon shows the popup. The tray menu provides explicit show and quit actions.
 - When the shortcut fires, the app attempts to read the current foreground selection.
 - If selected text is available, the app opens a small popup near the active context or at a deterministic fallback position.
 - The app classifies the selected text after backend capture succeeds. Single words and short phrase-like selections use the configured LLM word-study provider; sentence-like selections use DeepL text translation.
@@ -39,12 +42,14 @@ Out of scope for the first release:
 - While selection capture or structured response fields are pending, the popup should reserve the final result layout with skeleton placeholders and fade each field in as soon as that field is available.
 - The app validates the response against the expected schema before rendering it.
 - The default low-cost word-study provider is Gemini, with OpenAI available as the fallback provider when Gemini responses are not stable enough. Sentence-like translation uses DeepL when a DeepL API key is configured.
-- The user can change shortcut, provider, model, result language, and API key from the popup settings panel. DeepL keys are stored through the same provider-key mechanism and are used for sentence-like translation.
+- The user can change capture shortcut, close shortcut, provider, model, result language, and API key from the popup settings panel. DeepL keys are stored through the same provider-key mechanism and are used for sentence-like translation.
 - The user can adjust and persist the popup backdrop opacity from the popup settings panel.
 - Model settings are selected from a provider model-list endpoint when an API key is configured, with a small default fallback list when model-list retrieval is unavailable.
 - Result language settings are selected from an embedded dropdown list instead of a free-form text field.
 - Shortcut settings are recorded from an actual key chord, normalized as a `+`-separated accelerator such as `Ctrl+Shift+X`, and re-registered without restarting the app.
+- Close shortcut settings are recorded from an actual key chord, default to `Escape`, and may omit modifier keys.
 - The user can open settings from a gear button in the popup header.
+- The user can dismiss the popup with the configured close shortcut or the close affordance without quitting the app.
 - Result UI actions such as copy and retry are not shown in the bottom action bar.
 - The app shows actionable errors for unsupported selection source, empty selection, shortcut registration failure, provider failure, and schema validation failure.
 
@@ -78,6 +83,8 @@ Out of scope for the first release:
 - The popup should open at a stable default size but remain user-resizable within minimum constraints; loading text, long words, and errors should wrap or scroll inside their panes instead of clipping.
 - Word-study result rendering is a single dictionary-card layout with the headword, nuance, translations, and similar words visible in one scrollable surface. Text-translation result rendering is a simpler translation surface with the translated text and a source/translation segment view.
 - The desktop popup window should support a transparent webview background, with the page backdrop rendered as a subtle translucent layer rather than an opaque full-window fill.
+- When native window decorations are hidden, the popup should provide a narrow draggable region at the top edge without covering primary controls.
+- The popup should not appear as a normal taskbar window while hidden; the tray icon is the persistent entry point.
 - Pending capture and result areas should use skeleton placeholders instead of repeated loading text, so the result layout remains stable while streaming fields arrive.
 - Settings opens from a header gear button, not a bottom action bar.
 - Settings includes a compact persisted backdrop opacity control that updates the translucent popup background immediately.

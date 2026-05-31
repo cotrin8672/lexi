@@ -22,6 +22,7 @@ Rust backend:
 - `shortcut`: owns global shortcut registration and event mapping.
 - `llm`: sends typed requests to the configured model provider and validates response shape.
 - `settings`: loads and saves user settings.
+- `tray`: owns the system tray icon, tray menu, and popup re-show behavior.
 - `errors`: defines stable error codes and user-safe diagnostics.
 - `schema`: defines word-study and text-translation result contracts and rejects missing required fields or unknown schema versions.
 - `commands`: exposes narrow Tauri commands to the frontend.
@@ -38,16 +39,17 @@ Solid frontend:
 ## Data Flow
 
 1. App starts and registers the configured global shortcut.
-2. User selects text in another application.
-3. User presses the shortcut.
-4. Backend receives the shortcut event and requests selected text from `selection`.
-5. Backend completes selected-text capture before focusing the Lexi popup, so the active target application is not replaced by Lexi.
-6. Popup opens with a capture, mock-transform loading, result, or error state.
-7. In Phase 4, the frontend renders a validated mock `LexiResultV1` result so the popup can be exercised before provider integration.
-8. In Phase 5, after capture succeeds, the backend immediately starts the configured LLM provider request instead of waiting for a frontend command round trip.
-9. Provider responses are received as streams where supported. Backend accumulates the JSON, extracts completed safe partial fields, and emits progress events for incremental UI rendering.
-10. Backend validates the completed provider response against `schemaVersion`.
-11. Frontend renders skeleton placeholders for pending result fields, fades in completed partial content while streaming, then swaps to the validated final result or error state.
+2. App creates a system tray icon and keeps the main popup hidden until activation.
+3. User selects text in another application.
+4. User presses the shortcut.
+5. Backend receives the shortcut event and requests selected text from `selection`.
+6. Backend completes selected-text capture before focusing the Lexi popup, so the active target application is not replaced by Lexi.
+7. Popup opens with a capture, mock-transform loading, result, or error state.
+8. In Phase 4, the frontend renders a validated mock `LexiResultV1` result so the popup can be exercised before provider integration.
+9. In Phase 5, after capture succeeds, the backend immediately starts the configured LLM provider request instead of waiting for a frontend command round trip.
+10. Provider responses are received as streams where supported. Backend accumulates the JSON, extracts completed safe partial fields, and emits progress events for incremental UI rendering.
+11. Backend validates the completed provider response against `schemaVersion`.
+12. Frontend renders skeleton placeholders for pending result fields, fades in completed partial content while streaming, then swaps to the validated final result or error state.
 
 ## Tauri Boundary
 
@@ -60,7 +62,9 @@ Prefer a small command surface:
 - `list_provider_models(provider: ProviderKind) -> ProviderModelsResult`
 - `get_provider_settings() -> ProviderSettingsView`
 - `update_provider_settings(input: ProviderSettingsUpdate) -> ProviderSettingsView`
-  - Includes the configurable shortcut, persisted background opacity, provider, model, result language, prompt mode, and optional API key update.
+  - Includes the configurable capture shortcut, close shortcut, persisted background opacity, provider, model, result language, prompt mode, and optional API key update.
+- `hide_main_window() -> ()`
+  - Hides the popup to the tray for close-shortcut and close-button dismissal.
 - `copy_result(input: CopyRequest) -> CopyResult`
 
 Do not expose broad filesystem, shell, HTTP, or clipboard permissions directly to frontend code unless a specific feature requires them and the capability file is updated deliberately.
@@ -76,6 +80,13 @@ Phase 3 shortcut shell command:
 - `get_shortcut_status() -> ShortcutStatus`
 - Returns the configured shortcut and any startup registration error.
 - Does not register shortcuts from the frontend; registration is backend-owned.
+
+System tray behavior:
+
+- The backend creates the tray icon during setup using the configured app icon.
+- Left-clicking the tray icon shows and focuses the main popup.
+- The tray menu exposes `Show Lexi` and `Quit Lexi`. Window close requests hide the popup instead of exiting; the tray quit action exits the process.
+- The main window is configured with `skipTaskbar` so the tray remains the persistent desktop entry point.
 
 Phase 3 frontend event:
 
@@ -100,8 +111,9 @@ Phase 4 popup state:
 - The word-study result renders as a single dictionary-card surface modeled after the editorial preview: a headword header with optional irregular inflections, a nuance callout, translation rows with part-of-speech marks and examples, similar-word rows with expandable usage comparisons, and idiom rows with Japanese meanings and examples.
 - The text-translation result renders as a simpler translation surface with the translated text first and a compact source/translation segment section below it.
 - Result actions are copy, retry, close, and settings. Copy writes only the structured mock result text, not captured source text.
+- The configured close shortcut and close action hide the popup to the tray rather than terminating the process.
 - Phase 5 removes the bottom result action bar. Settings opens from a header gear button and exposes provider, provider-backed model dropdown, embedded result-language dropdown, and API key update fields.
-- The settings panel also exposes a shortcut recorder. Saving settings sends the recorded key chord through the Rust command boundary; the backend validates, normalizes, persists, and re-registers the shortcut immediately. If registration fails, the previous registered shortcut is restored and the frontend receives a `ShortcutRegistrationFailed` error.
+- The settings panel also exposes shortcut recorders for capture and close actions. Saving settings sends the recorded key chords through the Rust command boundary; the backend validates, normalizes, persists, and re-registers the capture shortcut immediately. If registration fails, the previous registered capture shortcut is restored and the frontend receives a `ShortcutRegistrationFailed` error. The close shortcut is local to the popup and may omit modifier keys.
 - The settings panel also exposes a persisted background opacity slider. It updates a CSS custom property on the popup shell for background fills, borders, and shadows without reducing text or icon opacity, and saves through the Rust-owned settings file.
 - The popup window opens at a 500 by 620 default size with 360 by 360 minimum constraints and remains resizable. The frontend shell uses responsive constraints and pane-level scrolling so long result text does not clip at narrow widths.
 - The Tauri window enables `transparent`, and the frontend keeps `html`, `body`, `#root`, and the full-window shell free of opaque fills so the popup backdrop can be translucent on supported desktops.
