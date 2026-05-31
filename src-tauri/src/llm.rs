@@ -2032,7 +2032,7 @@ mod tests {
             request_id: 7,
             selected_text_preview: "subtle".to_string(),
             selected_text: None,
-            shortcut: "Ctrl+Shift+X".to_string(),
+            shortcut: "Ctrl+E".to_string(),
             capture_method: "uia-foreground-window",
             source_process: Some("notepad.exe".to_string()),
             source_window_title: None,

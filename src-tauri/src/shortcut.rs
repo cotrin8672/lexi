@@ -8,8 +8,9 @@ use std::sync::Mutex;
 use tauri::{AppHandle, Emitter, Manager};
 use tauri_plugin_global_shortcut::{Code, GlobalShortcutExt, Modifiers, Shortcut, ShortcutState};
 
-pub const DEFAULT_SHORTCUT_LABEL: &str = "Ctrl+Shift+X";
+pub const DEFAULT_SHORTCUT_LABEL: &str = "Ctrl+E";
 pub const DEFAULT_CLOSE_SHORTCUT_LABEL: &str = "Escape";
+pub const DEFAULT_PRONUNCIATION_SHORTCUT_LABEL: &str = "Ctrl+Shift+P";
 const CAPTURE_EVENT: &str = "lexi:capture";
 
 pub struct ShortcutRegistrationState {
@@ -173,6 +174,10 @@ pub fn normalize_shortcut_label(input: &str) -> Result<String, AppError> {
 pub fn normalize_close_shortcut_label(input: &str) -> Result<String, AppError> {
     let parsed = parse_shortcut_parts(input, false)?;
     Ok(parsed.label)
+}
+
+pub fn normalize_pronunciation_shortcut_label(input: &str) -> Result<String, AppError> {
+    normalize_shortcut_label(input)
 }
 
 fn register_shortcut(app: &AppHandle, shortcut_label: &str) -> Result<(), AppError> {
@@ -488,7 +493,7 @@ mod tests {
             serde_json::to_value(event).expect("capture event should serialize"),
             json!({
                 "status": "capturing",
-                "shortcut": "Ctrl+Shift+X",
+                "shortcut": "Ctrl+E",
             })
         );
     }
@@ -508,7 +513,7 @@ mod tests {
             serde_json::to_value(event).expect("capture event should serialize"),
             json!({
                 "status": "captured",
-                "shortcut": "Ctrl+Shift+X",
+                "shortcut": "Ctrl+E",
                 "captureMethod": "uia-foreground-window",
                 "sourceProcess": "notepad.exe",
                 "sourceWindowTitle": "note.txt - Notepad",
@@ -537,7 +542,7 @@ mod tests {
         let value = serde_json::to_value(event).expect("capture event should serialize");
 
         assert_eq!(value["status"], "failed");
-        assert_eq!(value["shortcut"], "Ctrl+Shift+X");
+        assert_eq!(value["shortcut"], "Ctrl+E");
         assert_eq!(value["selectionErrorCode"], "SelectionUnsupported");
         assert_eq!(value["captureMethod"], "uia-foreground-window");
         assert_eq!(value["sourceProcess"], "example.exe");

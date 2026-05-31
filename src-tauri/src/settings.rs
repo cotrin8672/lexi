@@ -46,6 +46,8 @@ pub struct ProviderSettings {
     pub shortcut: String,
     #[serde(default = "default_close_shortcut_setting")]
     pub close_shortcut: String,
+    #[serde(default = "default_pronunciation_shortcut_setting")]
+    pub pronunciation_shortcut: String,
     #[serde(default = "default_background_opacity")]
     pub background_opacity: f64,
     #[serde(default = "default_theme")]
@@ -67,6 +69,7 @@ impl Default for ProviderSettings {
         Self {
             shortcut: shortcut::DEFAULT_SHORTCUT_LABEL.to_string(),
             close_shortcut: shortcut::DEFAULT_CLOSE_SHORTCUT_LABEL.to_string(),
+            pronunciation_shortcut: shortcut::DEFAULT_PRONUNCIATION_SHORTCUT_LABEL.to_string(),
             background_opacity: default_background_opacity(),
             theme: default_theme(),
             provider: ProviderKind::Gemini,
@@ -114,6 +117,7 @@ impl ProviderSettings {
 pub struct ProviderSettingsView {
     pub shortcut: String,
     pub close_shortcut: String,
+    pub pronunciation_shortcut: String,
     pub background_opacity: f64,
     pub theme: ThemeMode,
     pub provider: ProviderKind,
@@ -131,6 +135,7 @@ pub struct ProviderSettingsView {
 pub struct ProviderSettingsUpdate {
     pub shortcut: String,
     pub close_shortcut: String,
+    pub pronunciation_shortcut: String,
     pub background_opacity: f64,
     pub theme: ThemeMode,
     pub provider: ProviderKind,
@@ -213,14 +218,13 @@ impl SettingsState {
         let normalized_shortcut = shortcut::normalize_shortcut_label(&update.shortcut)?;
         let normalized_close_shortcut =
             shortcut::normalize_close_shortcut_label(&update.close_shortcut)?;
-        if normalized_close_shortcut == normalized_shortcut {
-            return Err(AppError::new(
-                crate::errors::AppErrorCode::ShortcutRegistrationFailed,
-                "Close shortcut must be different from the capture shortcut.",
-                "provider settings rejected matching capture and close shortcuts",
-                false,
-            ));
-        }
+        let normalized_pronunciation_shortcut =
+            shortcut::normalize_pronunciation_shortcut_label(&update.pronunciation_shortcut)?;
+        ensure_distinct_shortcuts(
+            &normalized_shortcut,
+            &normalized_close_shortcut,
+            &normalized_pronunciation_shortcut,
+        )?;
         let background_opacity = validate_background_opacity(update.background_opacity)?;
         let previous_settings = self.load_settings(app)?;
         let supabase_url = match update.supabase_url.as_deref() {
@@ -238,6 +242,7 @@ impl SettingsState {
         let settings = ProviderSettings {
             shortcut: normalized_shortcut,
             close_shortcut: normalized_close_shortcut,
+            pronunciation_shortcut: normalized_pronunciation_shortcut,
             background_opacity,
             theme: update.theme,
             provider: update.provider,
@@ -309,6 +314,7 @@ fn settings_view(app: &AppHandle, settings: ProviderSettings) -> ProviderSetting
     ProviderSettingsView {
         shortcut: settings.shortcut,
         close_shortcut: settings.close_shortcut,
+        pronunciation_shortcut: settings.pronunciation_shortcut,
         background_opacity: settings.background_opacity,
         theme: settings.theme,
         provider: settings.provider,
@@ -399,6 +405,43 @@ fn default_shortcut_setting() -> String {
 
 fn default_close_shortcut_setting() -> String {
     shortcut::DEFAULT_CLOSE_SHORTCUT_LABEL.to_string()
+}
+
+fn default_pronunciation_shortcut_setting() -> String {
+    shortcut::DEFAULT_PRONUNCIATION_SHORTCUT_LABEL.to_string()
+}
+
+fn ensure_distinct_shortcuts(
+    capture: &str,
+    close: &str,
+    pronunciation: &str,
+) -> Result<(), AppError> {
+    if capture == close {
+        return Err(AppError::new(
+            crate::errors::AppErrorCode::ShortcutRegistrationFailed,
+            "Close shortcut must be different from the capture shortcut.",
+            "provider settings rejected matching capture and close shortcuts",
+            false,
+        ));
+    }
+    if capture == pronunciation {
+        return Err(AppError::new(
+            crate::errors::AppErrorCode::ShortcutRegistrationFailed,
+            "Pronunciation shortcut must be different from the capture shortcut.",
+            "provider settings rejected matching capture and pronunciation shortcuts",
+            false,
+        ));
+    }
+    if close == pronunciation {
+        return Err(AppError::new(
+            crate::errors::AppErrorCode::ShortcutRegistrationFailed,
+            "Pronunciation shortcut must be different from the close shortcut.",
+            "provider settings rejected matching close and pronunciation shortcuts",
+            false,
+        ));
+    }
+
+    Ok(())
 }
 
 fn default_background_opacity() -> f64 {
