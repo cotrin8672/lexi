@@ -85,9 +85,10 @@ pub fn schedule_sync(app: AppHandle) {
 
     tauri::async_runtime::spawn(async move {
         if let Err(error) = run_sync_cycle(&app).await {
+            let user_message = sync_failure_user_message(&error);
             update_runtime(&app, |state| {
                 state.lifecycle = SyncLifecycle::Error;
-                state.last_error = Some(error.user_message.clone());
+                state.last_error = Some(user_message);
             });
             let _ = app.emit("lexi:sync-status", build_status(&app));
         }
@@ -118,6 +119,15 @@ pub fn get_sync_status(
 pub fn retry_sync(app: AppHandle) -> Result<(), AppError> {
     schedule_sync(app);
     Ok(())
+}
+
+pub fn reset_runtime(app: &AppHandle) {
+    update_runtime(app, |state| {
+        state.lifecycle = SyncLifecycle::Idle;
+        state.last_sync_at = None;
+        state.last_error = None;
+    });
+    let _ = app.emit("lexi:sync-status", build_status(app));
 }
 
 pub async fn run_sync_cycle(app: &AppHandle) -> Result<(), AppError> {
@@ -174,6 +184,17 @@ pub async fn run_sync_cycle(app: &AppHandle) -> Result<(), AppError> {
         &session.access_token,
     )
     .await?;
+
+    if !crate::vocabulary_bootstrap::is_bootstrap_complete(app)? {
+        crate::vocabulary_bootstrap::bootstrap_from_supabase(
+            app,
+            &supabase_url,
+            &supabase_anon_key,
+            &session.access_token,
+        )
+        .await?;
+    }
+
     pull_remote_changes(
         app,
         &supabase_url,
@@ -398,6 +419,42 @@ fn update_runtime(app: &AppHandle, update: impl FnOnce(&mut SyncRuntimeState)) {
     }
 }
 
+fn sync_failure_user_message(error: &AppError) -> String {
+    match error.code {
+        AppErrorCode::SyncPushFailed => {
+            if error.user_message.contains("unavailable") {
+                "語彙の送信が一時的に利用できません".to_string()
+            } else {
+                "語彙の送信に失敗しました".to_string()
+            }
+        }
+        AppErrorCode::SyncPullFailed => {
+            if error.user_message.contains("unavailable") {
+                "語彙の取得が一時的に利用できません".to_string()
+            } else {
+                "語彙の取得に失敗しました".to_string()
+            }
+        }
+        AppErrorCode::SyncAuthRequired => {
+            if error.user_message.contains("Sign in again")
+                || error.user_message.contains("expired")
+            {
+                "セッションの有効期限が切れました。再ログインしてください".to_string()
+            } else {
+                "同期の認証に失敗しました".to_string()
+            }
+        }
+        AppErrorCode::VocabularyStoreFailed | AppErrorCode::SettingsIoFailed => {
+            "ローカル語彙データの処理に失敗しました".to_string()
+        }
+        AppErrorCode::CredentialStorageFailed => {
+            "保存済み認証情報にアクセスできませんでした".to_string()
+        }
+        AppErrorCode::ProviderRequestFailed => "語彙の同期中にエラーが発生しました".to_string(),
+        _ => error.user_message.clone(),
+    }
+}
+
 fn now_iso() -> String {
     let seconds = SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -530,8 +587,10 @@ fn parse_pull_response_body(body: &str) -> Result<PullResponse, AppError> {
 #[cfg(test)]
 mod tests {
     use super::{
-        build_mutation_envelope, parse_mutation_ack_body, parse_pull_response_body, SyncLifecycle,
+        build_mutation_envelope, parse_mutation_ack_body, parse_pull_response_body,
+        sync_failure_user_message, SyncLifecycle,
     };
+    use crate::errors::AppError;
     use crate::vocabulary::PendingMutation;
 
     #[test]
@@ -681,6 +740,13 @@ mod tests {
     }
 
     #[test]
+    fn sync_failure_user_message_maps_vocabulary_store_errors_to_japanese() {
+        let error = AppError::vocabulary_store_failed("vocabulary store open failed", true);
+        let message = sync_failure_user_message(&error);
+        assert_eq!(message, "ローカル語彙データの処理に失敗しました");
+    }
+
+    #[test]
     fn sync_lifecycle_serializes_in_camel_case() {
         let lifecycle = SyncLifecycle::Syncing;
         let serialized = serde_json::to_string(&lifecycle).expect("serialize lifecycle");
@@ -696,8 +762,42 @@ mod tests {
         assert!(migration.contains("pg_advisory_xact_lock"));
         assert!(migration.contains("returning id into v_form_id"));
         assert!(migration.contains("'lexemeFormId', v_form_id::text"));
-        assert!(migration.contains("'lexeme_form',\n        v_form_id"));
-        assert!(!migration.contains("'lexeme_form',\n        v_lexeme_id"));
+        assert!(migration.contains("'lexeme_form'"));
+        assert!(migration.contains("v_form_id"));
+        assert!(!migration.contains("v_lexeme_id,\n        'upsert'"));
+    }
+
+    #[test]
+    fn lookup_rpc_migration_declares_form_and_canonical_matchers() {
+        let migration =
+            include_str!("../../supabase/migrations/202605310003_lookup_vocabulary_card.sql");
+
+        assert!(migration.contains("lookup_vocabulary_card"));
+        assert!(migration.contains("lf.form_key = lookup_key"));
+        assert!(migration.contains("ul.canonical_key = lookup_key"));
+    }
+
+    #[test]
+    fn backfill_migration_repairs_canonical_and_irregular_lexeme_forms() {
+        let migration =
+            include_str!("../../supabase/migrations/202605310004_backfill_lexeme_forms.sql");
+
+        assert!(migration.contains("'canonical'"));
+        assert!(migration.contains("'irregular'"));
+        assert!(migration.contains("jsonb_array_elements(cs.content->'inflections')"));
+        assert!(migration.contains("on conflict (user_id, language, form_key, lexeme_id, relation)"));
+    }
+
+    #[test]
+    fn apply_mutation_migration_ensures_canonical_and_content_inflections() {
+        let migration = include_str!(
+            "../../supabase/migrations/202605310005_apply_mutation_ensure_lexeme_forms.sql"
+        );
+
+        assert!(migration.contains("'canonical'"));
+        assert!(migration.contains("'irregular'"));
+        assert!(migration.contains("jsonb_array_elements(v_content->'inflections')"));
+        assert!(migration.contains("v_form->>'form'"));
     }
 
     #[test]

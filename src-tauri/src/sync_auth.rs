@@ -120,8 +120,10 @@ pub fn start_google_sign_in(
 }
 
 #[tauri::command]
-pub fn sign_out_sync() -> Result<(), AppError> {
-    secrets::delete_supabase_session()
+pub fn sign_out_sync(app: AppHandle) -> Result<(), AppError> {
+    secrets::delete_supabase_session()?;
+    crate::sync::reset_runtime(&app);
+    Ok(())
 }
 
 pub fn current_user_id() -> Option<String> {

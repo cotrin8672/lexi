@@ -355,16 +355,24 @@ pub async fn list_provider_models(
         });
     }
 
-    let Some(api_key) = settings_state
-        .api_key(&app, provider)?
-        .filter(|key| !key.trim().is_empty())
-    else {
-        return Ok(ProviderModelsResult {
-            provider,
-            models: fallback_models(provider),
-            fetched: false,
-            warning: Some("API key is not configured; showing default models.".to_string()),
-        });
+    let api_key = match settings_state.api_key(&app, provider) {
+        Ok(Some(key)) if !key.trim().is_empty() => key,
+        Ok(_) => {
+            return Ok(ProviderModelsResult {
+                provider,
+                models: fallback_models(provider),
+                fetched: false,
+                warning: Some("API key is not configured; showing default models.".to_string()),
+            });
+        }
+        Err(error) => {
+            return Ok(ProviderModelsResult {
+                provider,
+                models: fallback_models(provider),
+                fetched: false,
+                warning: Some(error.user_message),
+            });
+        }
     };
 
     match fetch_provider_models(provider, &api_key).await {
@@ -384,7 +392,7 @@ pub async fn list_provider_models(
             provider,
             models: fallback_models(provider),
             fetched: false,
-            warning: Some(error.diagnostic_message),
+            warning: Some(error.user_message),
         }),
     }
 }
@@ -479,7 +487,7 @@ async fn run_transform_stream_for_capture(
     }
 
     if let Ok(Some(result)) =
-        vocabulary::load_cached_word_study(&app, &request.selected_text, &settings.result_language)
+        vocabulary::load_word_study(&app, &request.selected_text, &settings.result_language).await
     {
         let _ = app.emit(
             TRANSFORM_EVENT,
@@ -634,7 +642,7 @@ pub async fn run_transform(
     }
 
     if let Ok(Some(result)) =
-        vocabulary::load_cached_word_study(&app, &request.selected_text, &settings.result_language)
+        vocabulary::load_word_study(&app, &request.selected_text, &settings.result_language).await
     {
         return Ok(TransformResult {
             result: LexiResult::WordStudy(result),

@@ -10,6 +10,7 @@ pub mod sync;
 pub mod sync_auth;
 pub mod tray;
 pub mod vocabulary;
+pub mod vocabulary_bootstrap;
 
 use tauri::Manager;
 
