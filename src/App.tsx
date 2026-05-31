@@ -238,6 +238,10 @@ function syncStatusLabel(status: SyncStatus | null): string | null {
         : null;
   }
 }
+
+function syncStatusIsError(status: SyncStatus | null): boolean {
+  return status?.signedIn === true && status.lifecycle === "error";
+}
 const POPUP_WINDOW_SIZE = new LogicalSize(400, 700);
 const AUTH_WINDOW_SIZE = new LogicalSize(460, 560);
 const POPUP_MIN_SIZE = new LogicalSize(400, 360);
@@ -1303,6 +1307,9 @@ export function SettingsPanel(props: {
               )}
             </For>
           </select>
+          <Show when={modelsWarning()}>
+            {(message) => <p class="settings-note">{message()}</p>}
+          </Show>
         </label>
 
         <label>
@@ -1387,11 +1394,21 @@ export function SettingsPanel(props: {
             </Show>
           </div>
           <Show when={syncStatusLabel(props.syncStatus ?? null)}>
-            {(message) => <p class="settings-note">{message()}</p>}
+            {(message) => (
+              <p
+                class={
+                  syncStatusIsError(props.syncStatus ?? null)
+                    ? "settings-error"
+                    : "settings-note"
+                }
+              >
+                {message()}
+              </p>
+            )}
           </Show>
           <Show
             when={
-              props.syncStatus?.lifecycle === "error" && props.onRetrySync
+              syncStatusIsError(props.syncStatus ?? null) && props.onRetrySync
             }
           >
             <button
@@ -1405,10 +1422,6 @@ export function SettingsPanel(props: {
             </button>
           </Show>
         </div>
-
-        <Show when={modelsWarning()}>
-          {(message) => <p class="settings-note">{message()}</p>}
-        </Show>
 
         <Show when={error()}>
           {(message) => <p class="settings-error">{message()}</p>}
@@ -2025,16 +2038,40 @@ function inflectionsForState(state: PopupState): Inflection[] {
   return [];
 }
 
-function normalizeAppError(error: unknown): AppError {
+function coerceAppError(error: unknown): AppError | null {
   if (isAppError(error)) {
     return error;
   }
 
+  if (typeof error === "string") {
+    try {
+      const parsed = JSON.parse(error) as unknown;
+      if (isAppError(parsed)) {
+        return parsed;
+      }
+    } catch {
+      return null;
+    }
+  }
+
+  return null;
+}
+
+function normalizeAppError(error: unknown): AppError {
+  const parsed = coerceAppError(error);
+  if (parsed) {
+    return parsed;
+  }
+
   return {
     code: "ProviderRequestFailed",
-    userMessage: "LLM request failed.",
+    userMessage: "Something went wrong.",
     diagnosticMessage:
-      typeof error === "string" ? error : "unknown frontend error",
+      error instanceof Error
+        ? error.message
+        : typeof error === "string"
+          ? error
+          : "unknown frontend error",
     retryable: true,
   };
 }
