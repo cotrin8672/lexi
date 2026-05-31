@@ -1,15 +1,15 @@
+use rand::seq::SliceRandom;
 use std::ffi::OsString;
 use std::os::windows::ffi::OsStringExt;
 use std::sync::Mutex;
-use rand::seq::SliceRandom;
 use windows::core::PCWSTR;
+use windows::Win32::Foundation::BOOL;
 use windows::Win32::Media::Speech::{
     IEnumSpObjectTokens, ISpObjectToken, ISpObjectTokenCategory, ISpVoice, SpObjectTokenCategory,
     SpVoice, SPCAT_VOICES, SPF_PURGEBEFORESPEAK,
 };
 use windows::Win32::System::Com::{CoCreateInstance, CoTaskMemFree, CLSCTX_INPROC_SERVER};
 use windows::Win32::System::Ole::{OleInitialize, OleUninitialize};
-use windows::Win32::Foundation::BOOL;
 
 static SPEECH_MUTEX: Mutex<()> = Mutex::new(());
 

@@ -679,7 +679,9 @@ mod tests {
         let mut result = valid_result();
         result.headword = "a".repeat(49);
 
-        let error = result.validate().expect_err("overlong headword should fail");
+        let error = result
+            .validate()
+            .expect_err("overlong headword should fail");
 
         assert_eq!(error.code, AppErrorCode::InvalidModelOutput);
         assert!(error.diagnostic_message.contains("headword"));

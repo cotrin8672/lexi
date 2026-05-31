@@ -12,8 +12,7 @@ const WINDOW_EDGE_MARGIN: i32 = 16;
 
 pub fn setup(app: &mut App) -> Result<(), Box<dyn std::error::Error>> {
     let show = MenuItem::with_id(app, SHOW_MENU_ID, "Show Lexi", true, None::<&str>)?;
-    let settings =
-        MenuItem::with_id(app, SETTINGS_MENU_ID, "Settings", true, None::<&str>)?;
+    let settings = MenuItem::with_id(app, SETTINGS_MENU_ID, "Settings", true, None::<&str>)?;
     let quit = MenuItem::with_id(app, QUIT_MENU_ID, "Quit Lexi", true, None::<&str>)?;
     let menu = Menu::with_items(app, &[&show, &settings, &quit])?;
     let icon = app
