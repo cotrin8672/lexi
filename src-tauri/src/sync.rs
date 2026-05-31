@@ -48,6 +48,7 @@ pub struct SyncRuntimeState {
 pub struct SyncRuntime {
     state: Mutex<SyncRuntimeState>,
     in_flight: AtomicBool,
+    rerun_requested: AtomicBool,
 }
 
 impl Default for SyncRuntime {
@@ -55,6 +56,7 @@ impl Default for SyncRuntime {
         Self {
             state: Mutex::new(SyncRuntimeState::default()),
             in_flight: AtomicBool::new(false),
+            rerun_requested: AtomicBool::new(false),
         }
     }
 }
@@ -134,81 +136,110 @@ pub async fn run_sync_cycle(app: &AppHandle) -> Result<(), AppError> {
     let runtime = app.state::<SyncRuntime>();
     let runtime = runtime.inner();
 
-    if runtime
-        .in_flight
-        .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
-        .is_err()
-    {
+    if !mark_sync_started_or_request_rerun(runtime) {
         return Ok(());
     }
 
     struct InFlightGuard<'a> {
         runtime: &'a SyncRuntime,
+        released: bool,
     }
 
     impl Drop for InFlightGuard<'_> {
         fn drop(&mut self) {
-            self.runtime.in_flight.store(false, Ordering::SeqCst);
+            if !self.released {
+                self.runtime.in_flight.store(false, Ordering::SeqCst);
+            }
         }
     }
 
-    let _guard = InFlightGuard { runtime };
-
-    let settings_state = app.state::<SettingsState>();
-    let settings = settings_state.load_settings(app)?;
-    let Some((supabase_url, supabase_anon_key)) = settings.supabase_connection() else {
-        return Ok(());
-    };
-
-    let Some(session) = sync_auth::read_session()? else {
-        return Ok(());
-    };
-
-    update_runtime(app, |state| {
-        state.lifecycle = SyncLifecycle::Syncing;
-        state.last_error = None;
-    });
-    let _ = app.emit("lexi:sync-status", build_status(app));
-
-    let session =
-        sync_auth::refresh_session_if_needed(&supabase_url, &supabase_anon_key, session).await?;
-
-    if let Some(user_id) = sync_auth::current_user_id() {
-        vocabulary::migrate_local_rows_to_user(app, &user_id)?;
+    impl InFlightGuard<'_> {
+        fn release(&mut self) {
+            self.runtime.in_flight.store(false, Ordering::SeqCst);
+            self.released = true;
+        }
     }
 
-    push_pending_mutations(
-        app,
-        &supabase_url,
-        &supabase_anon_key,
-        &session.access_token,
-    )
-    .await?;
+    let mut guard = InFlightGuard {
+        runtime,
+        released: false,
+    };
 
-    if !crate::vocabulary_bootstrap::is_bootstrap_complete(app)? {
-        crate::vocabulary_bootstrap::bootstrap_from_supabase(
+    loop {
+        runtime.rerun_requested.store(false, Ordering::SeqCst);
+
+        let settings_state = app.state::<SettingsState>();
+        let settings = settings_state.load_settings(app)?;
+        let Some((supabase_url, supabase_anon_key)) = settings.supabase_connection() else {
+            return Ok(());
+        };
+
+        let Some(session) = sync_auth::read_session()? else {
+            return Ok(());
+        };
+
+        update_runtime(app, |state| {
+            state.lifecycle = SyncLifecycle::Syncing;
+            state.last_error = None;
+        });
+        let _ = app.emit("lexi:sync-status", build_status(app));
+
+        let session =
+            sync_auth::refresh_session_if_needed(&supabase_url, &supabase_anon_key, session)
+                .await?;
+
+        if let Some(user_id) = sync_auth::current_user_id() {
+            vocabulary::migrate_local_rows_to_user(app, &user_id)?;
+        }
+
+        push_pending_mutations(
             app,
             &supabase_url,
             &supabase_anon_key,
             &session.access_token,
         )
         .await?;
+
+        if !crate::vocabulary_bootstrap::is_bootstrap_complete(app)? {
+            crate::vocabulary_bootstrap::bootstrap_from_supabase(
+                app,
+                &supabase_url,
+                &supabase_anon_key,
+                &session.access_token,
+            )
+            .await?;
+        }
+
+        pull_remote_changes(
+            app,
+            &supabase_url,
+            &supabase_anon_key,
+            &session.access_token,
+        )
+        .await?;
+
+        update_runtime(app, |state| {
+            state.lifecycle = SyncLifecycle::Synced;
+            state.last_sync_at = Some(now_iso());
+            state.last_error = None;
+        });
+        let _ = app.emit("lexi:sync-status", build_status(app));
+
+        if runtime.rerun_requested.swap(false, Ordering::SeqCst) {
+            continue;
+        }
+
+        guard.release();
+        if runtime.rerun_requested.swap(false, Ordering::SeqCst)
+            && mark_sync_started_or_request_rerun(runtime)
+        {
+            guard.released = false;
+            continue;
+        } else {
+            break;
+        }
     }
 
-    pull_remote_changes(
-        app,
-        &supabase_url,
-        &supabase_anon_key,
-        &session.access_token,
-    )
-    .await?;
-
-    update_runtime(app, |state| {
-        state.lifecycle = SyncLifecycle::Synced;
-        state.last_sync_at = Some(now_iso());
-        state.last_error = None;
-    });
-    let _ = app.emit("lexi:sync-status", build_status(app));
     Ok(())
 }
 
@@ -225,12 +256,14 @@ async fn push_pending_mutations(
                 vocabulary::acknowledge_mutation(app, &ack.operation_id, ack.server_revision)?;
             }
             Err(error) => {
-                vocabulary::fail_mutation(
-                    app,
-                    &mutation.operation_id,
-                    &error.diagnostic_message,
-                    error.retryable,
-                )?;
+                if should_record_mutation_failure(&error) {
+                    vocabulary::fail_mutation(
+                        app,
+                        &mutation.operation_id,
+                        &error.diagnostic_message,
+                        error.retryable,
+                    )?;
+                }
                 return Err(error);
             }
         }
@@ -278,11 +311,10 @@ async fn push_mutation(
     })?;
 
     if !status.is_success() {
-        return Err(AppError::new(
-            AppErrorCode::SyncPushFailed,
-            "Vocabulary sync failed.",
-            supabase_response_diagnostic("mutation endpoint", status, &body),
-            status.is_server_error(),
+        return Err(supabase_push_status_error(
+            "mutation endpoint",
+            status,
+            &body,
         ));
     }
 
@@ -370,12 +402,7 @@ async fn fetch_changes(
     })?;
 
     if !status.is_success() {
-        return Err(AppError::new(
-            AppErrorCode::SyncPullFailed,
-            "Vocabulary sync failed.",
-            supabase_response_diagnostic("pull endpoint", status, &body),
-            status.is_server_error(),
-        ));
+        return Err(supabase_pull_status_error("pull endpoint", status, &body));
     }
 
     parse_pull_response_body(&body)
@@ -417,6 +444,23 @@ fn update_runtime(app: &AppHandle, update: impl FnOnce(&mut SyncRuntimeState)) {
             update(&mut state);
         }
     }
+}
+
+fn mark_sync_started_or_request_rerun(runtime: &SyncRuntime) -> bool {
+    if runtime
+        .in_flight
+        .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
+        .is_ok()
+    {
+        return true;
+    }
+
+    runtime.rerun_requested.store(true, Ordering::SeqCst);
+    false
+}
+
+fn should_record_mutation_failure(error: &AppError) -> bool {
+    error.code != AppErrorCode::SyncAuthRequired
 }
 
 fn sync_failure_user_message(error: &AppError) -> String {
@@ -490,6 +534,54 @@ fn supabase_response_diagnostic(
         "Supabase {endpoint_label} returned {status} with {} response bytes",
         body.len()
     )
+}
+
+fn supabase_push_status_error(
+    endpoint_label: &str,
+    status: reqwest::StatusCode,
+    body: &str,
+) -> AppError {
+    supabase_status_error(AppErrorCode::SyncPushFailed, endpoint_label, status, body)
+}
+
+fn supabase_pull_status_error(
+    endpoint_label: &str,
+    status: reqwest::StatusCode,
+    body: &str,
+) -> AppError {
+    supabase_status_error(AppErrorCode::SyncPullFailed, endpoint_label, status, body)
+}
+
+fn supabase_status_error(
+    fallback_code: AppErrorCode,
+    endpoint_label: &str,
+    status: reqwest::StatusCode,
+    body: &str,
+) -> AppError {
+    let diagnostic = supabase_response_diagnostic(endpoint_label, status, body);
+    match status {
+        reqwest::StatusCode::UNAUTHORIZED | reqwest::StatusCode::FORBIDDEN => AppError::new(
+            AppErrorCode::SyncAuthRequired,
+            "Supabase session expired. Sign in again.",
+            diagnostic,
+            false,
+        ),
+        reqwest::StatusCode::REQUEST_TIMEOUT
+        | reqwest::StatusCode::CONFLICT
+        | reqwest::StatusCode::TOO_EARLY
+        | reqwest::StatusCode::TOO_MANY_REQUESTS => AppError::new(
+            fallback_code,
+            "Vocabulary sync is temporarily unavailable.",
+            diagnostic,
+            true,
+        ),
+        _ => AppError::new(
+            fallback_code,
+            "Vocabulary sync failed.",
+            diagnostic,
+            status.is_server_error(),
+        ),
+    }
 }
 
 fn parse_mutation_ack_body(
@@ -587,11 +679,13 @@ fn parse_pull_response_body(body: &str) -> Result<PullResponse, AppError> {
 #[cfg(test)]
 mod tests {
     use super::{
-        build_mutation_envelope, parse_mutation_ack_body, parse_pull_response_body,
-        sync_failure_user_message, SyncLifecycle,
+        build_mutation_envelope, mark_sync_started_or_request_rerun, parse_mutation_ack_body,
+        parse_pull_response_body, should_record_mutation_failure, supabase_pull_status_error,
+        supabase_push_status_error, sync_failure_user_message, SyncLifecycle, SyncRuntime,
     };
-    use crate::errors::AppError;
+    use crate::errors::{AppError, AppErrorCode};
     use crate::vocabulary::PendingMutation;
+    use std::sync::atomic::Ordering;
 
     #[test]
     fn builds_mutation_envelope_for_rpc() {
@@ -754,6 +848,71 @@ mod tests {
     }
 
     #[test]
+    fn schedule_during_in_flight_requests_follow_up_cycle() {
+        let runtime = SyncRuntime::default();
+
+        assert!(mark_sync_started_or_request_rerun(&runtime));
+        assert!(!mark_sync_started_or_request_rerun(&runtime));
+        assert!(runtime.rerun_requested.load(Ordering::SeqCst));
+    }
+
+    #[test]
+    fn auth_errors_do_not_mark_mutations_failed() {
+        let auth_error = AppError::new(
+            AppErrorCode::SyncAuthRequired,
+            "Supabase session expired. Sign in again.",
+            "refresh failed",
+            false,
+        );
+        let push_error = AppError::new(
+            AppErrorCode::SyncPushFailed,
+            "Vocabulary sync is temporarily unavailable.",
+            "rate limited",
+            true,
+        );
+
+        assert!(!should_record_mutation_failure(&auth_error));
+        assert!(should_record_mutation_failure(&push_error));
+    }
+
+    #[test]
+    fn supabase_status_errors_classify_auth_and_rate_limit_without_failing_outbox() {
+        let auth_error =
+            supabase_push_status_error("mutation endpoint", reqwest::StatusCode::UNAUTHORIZED, "");
+        assert_eq!(auth_error.code, AppErrorCode::SyncAuthRequired);
+        assert!(!auth_error.retryable);
+
+        let rate_limit_error = supabase_push_status_error(
+            "mutation endpoint",
+            reqwest::StatusCode::TOO_MANY_REQUESTS,
+            "",
+        );
+        assert_eq!(rate_limit_error.code, AppErrorCode::SyncPushFailed);
+        assert!(rate_limit_error.retryable);
+
+        let validation_error = supabase_push_status_error(
+            "mutation endpoint",
+            reqwest::StatusCode::UNPROCESSABLE_ENTITY,
+            "",
+        );
+        assert_eq!(validation_error.code, AppErrorCode::SyncPushFailed);
+        assert!(!validation_error.retryable);
+    }
+
+    #[test]
+    fn pull_status_errors_share_auth_and_retry_classification() {
+        let auth_error =
+            supabase_pull_status_error("pull endpoint", reqwest::StatusCode::FORBIDDEN, "");
+        assert_eq!(auth_error.code, AppErrorCode::SyncAuthRequired);
+        assert!(!auth_error.retryable);
+
+        let retryable_error =
+            supabase_pull_status_error("pull endpoint", reqwest::StatusCode::REQUEST_TIMEOUT, "");
+        assert_eq!(retryable_error.code, AppErrorCode::SyncPullFailed);
+        assert!(retryable_error.retryable);
+    }
+
+    #[test]
     fn sync_rpc_migration_records_each_lexeme_form_by_form_id() {
         let migration =
             include_str!("../../supabase/migrations/202605310002_vocabulary_sync_rpcs.sql");
@@ -785,7 +944,9 @@ mod tests {
         assert!(migration.contains("'canonical'"));
         assert!(migration.contains("'irregular'"));
         assert!(migration.contains("jsonb_array_elements(cs.content->'inflections')"));
-        assert!(migration.contains("on conflict (user_id, language, form_key, lexeme_id, relation)"));
+        assert!(
+            migration.contains("on conflict (user_id, language, form_key, lexeme_id, relation)")
+        );
     }
 
     #[test]
