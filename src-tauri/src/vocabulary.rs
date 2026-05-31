@@ -59,6 +59,15 @@ pub fn load_cached_word_study(
     load_cached_word_study_from_connection(&connection, &lookup_key, result_language)
 }
 
+/// Resolve a word-study card from the local SQLite replica.
+pub async fn load_word_study(
+    app: &AppHandle,
+    selected_text: &str,
+    result_language: &str,
+) -> Result<Option<LexiResultV1>, AppError> {
+    load_cached_word_study(app, selected_text, result_language)
+}
+
 pub fn save_word_study_result(
     app: &AppHandle,
     result: &LexiResultV1,
@@ -70,11 +79,11 @@ pub fn save_word_study_result(
     save_word_study_result_to_connection(&mut connection, result, provider, model, selected_text)
 }
 
-fn open_store(app: &AppHandle) -> Result<Connection, AppError> {
+pub fn open_store(app: &AppHandle) -> Result<Connection, AppError> {
     let path = store_path(app)?;
     ensure_parent(&path)?;
     let connection = Connection::open(path).map_err(|error| {
-        AppError::provider_request_failed(format!("vocabulary store open failed: {error}"), true)
+        AppError::vocabulary_store_failed(format!("vocabulary store open failed: {error}"), true)
     })?;
     initialize_schema(&connection)?;
     Ok(connection)
@@ -85,14 +94,14 @@ fn store_path(app: &AppHandle) -> Result<PathBuf, AppError> {
         .app_data_dir()
         .map(|dir| dir.join("lexi-vocabulary.sqlite3"))
         .map_err(|error| {
-            AppError::provider_request_failed(format!("app data dir unavailable: {error}"), true)
+            AppError::vocabulary_store_failed(format!("app data dir unavailable: {error}"), true)
         })
 }
 
 fn ensure_parent(path: &PathBuf) -> Result<(), AppError> {
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent).map_err(|error| {
-            AppError::provider_request_failed(
+            AppError::vocabulary_store_failed(
                 format!("vocabulary store dir create failed: {error}"),
                 true,
             )
@@ -225,7 +234,7 @@ fn initialize_schema(connection: &Connection) -> Result<(), AppError> {
             "#,
         )
         .map_err(|error| {
-            AppError::provider_request_failed(
+            AppError::vocabulary_store_failed(
                 format!("vocabulary store schema init failed: {error}"),
                 false,
             )
@@ -247,7 +256,7 @@ fn initialize_schema(connection: &Connection) -> Result<(), AppError> {
             [],
         )
         .map_err(|error| {
-            AppError::provider_request_failed(
+            AppError::vocabulary_store_failed(
                 format!("vocabulary remote change index failed: {error}"),
                 false,
             )
@@ -264,7 +273,7 @@ fn ensure_column(
     let mut statement = connection
         .prepare(&format!("pragma table_info({table})"))
         .map_err(|error| {
-            AppError::provider_request_failed(
+            AppError::vocabulary_store_failed(
                 format!("vocabulary schema inspect failed for {table}: {error}"),
                 false,
             )
@@ -272,13 +281,13 @@ fn ensure_column(
     let rows = statement
         .query_map([], |row| row.get::<_, String>(1))
         .map_err(|error| {
-            AppError::provider_request_failed(
+            AppError::vocabulary_store_failed(
                 format!("vocabulary schema inspect query failed for {table}: {error}"),
                 false,
             )
         })?;
     let columns = rows.collect::<Result<Vec<_>, _>>().map_err(|error| {
-        AppError::provider_request_failed(
+        AppError::vocabulary_store_failed(
             format!("vocabulary schema inspect row failed for {table}: {error}"),
             false,
         )
@@ -292,7 +301,7 @@ fn ensure_column(
             [],
         )
         .map_err(|error| {
-            AppError::provider_request_failed(
+            AppError::vocabulary_store_failed(
                 format!("vocabulary schema alter failed for {table}.{column}: {error}"),
                 false,
             )
@@ -391,10 +400,30 @@ fn query_lexeme_form_matches(
                       and cs2.result_language = ?3
                       and cs2.active = 1
                   )
+
+                union all
+
+                select ul.id, 'canonical', ul.canonical_text, cs.content_json
+                from user_lexemes ul
+                join card_snapshots cs on cs.lexeme_id = ul.id
+                where ul.user_id = ?1
+                  and ul.language = 'en'
+                  and ul.canonical_key = ?2
+                  and cs.result_language = ?3
+                  and cs.active = 1
+                  and ul.deleted_at is null
+                  and cs.created_at = (
+                    select max(cs2.created_at)
+                    from card_snapshots cs2
+                    where cs2.lexeme_id = ul.id
+                      and cs2.user_id = ?1
+                      and cs2.result_language = ?3
+                      and cs2.active = 1
+                  )
                 "#,
             )
             .map_err(|error| {
-                AppError::provider_request_failed(
+                AppError::vocabulary_store_failed(
                     format!("vocabulary form match prepare failed: {error}"),
                     true,
                 )
@@ -410,14 +439,14 @@ fn query_lexeme_form_matches(
                 })
             })
             .map_err(|error| {
-                AppError::provider_request_failed(
+                AppError::vocabulary_store_failed(
                     format!("vocabulary form match query failed: {error}"),
                     true,
                 )
             })?;
 
         return rows.collect::<Result<Vec<_>, _>>().map_err(|error| {
-            AppError::provider_request_failed(
+            AppError::vocabulary_store_failed(
                 format!("vocabulary form match row failed: {error}"),
                 true,
             )
@@ -434,10 +463,19 @@ fn query_lexeme_form_matches(
               and lf.language = 'en'
               and lf.form_key = ?2
               and ul.deleted_at is null
+
+            union all
+
+            select ul.id, 'canonical', ul.canonical_text
+            from user_lexemes ul
+            where ul.user_id = ?1
+              and ul.language = 'en'
+              and ul.canonical_key = ?2
+              and ul.deleted_at is null
             "#,
         )
         .map_err(|error| {
-            AppError::provider_request_failed(
+            AppError::vocabulary_store_failed(
                 format!("vocabulary form match prepare failed: {error}"),
                 true,
             )
@@ -453,14 +491,14 @@ fn query_lexeme_form_matches(
             })
         })
         .map_err(|error| {
-            AppError::provider_request_failed(
+            AppError::vocabulary_store_failed(
                 format!("vocabulary form match query failed: {error}"),
                 true,
             )
         })?;
 
     rows.collect::<Result<Vec<_>, _>>().map_err(|error| {
-        AppError::provider_request_failed(
+        AppError::vocabulary_store_failed(
             format!("vocabulary form match row failed: {error}"),
             true,
         )
@@ -496,7 +534,7 @@ fn resolve_lexeme_for_save(
         )
         .optional()
         .map_err(|error| {
-            AppError::provider_request_failed(
+            AppError::vocabulary_store_failed(
                 format!("vocabulary save redirect lookup failed: {error}"),
                 true,
             )
@@ -541,33 +579,29 @@ fn load_cached_word_study_from_connection(
     let user_id = effective_user_id();
     let matches =
         query_lexeme_form_matches(connection, lookup_key, Some(result_language), &user_id)?;
-    let Some(lexeme_id) = resolve_unique_lexeme_for_form_key(lookup_key, &matches) else {
+    word_study_from_form_matches(lookup_key, &matches)
+}
+
+fn word_study_from_form_matches(
+    lookup_key: &str,
+    matches: &[LexemeFormMatch],
+) -> Result<Option<LexiResultV1>, AppError> {
+    let Some(lexeme_id) = resolve_unique_lexeme_for_form_key(lookup_key, matches) else {
         return Ok(None);
     };
 
-    let content_json = connection
-        .query_row(
-            r#"
-            select content_json
-            from card_snapshots
-            where user_id = ?1
-              and lexeme_id = ?2
-              and result_language = ?3
-              and active = 1
-            order by created_at desc
-            limit 1
-            "#,
-            params![user_id, lexeme_id, result_language],
-            |row| row.get::<_, String>(0),
-        )
-        .map_err(|error| {
-            AppError::provider_request_failed(
-                format!("vocabulary cache snapshot lookup failed: {error}"),
-                true,
+    let content_json = matches
+        .iter()
+        .find(|form_match| form_match.lexeme_id == lexeme_id)
+        .and_then(|form_match| form_match.content_json.as_ref())
+        .ok_or_else(|| {
+            AppError::vocabulary_store_failed(
+                "resolved vocabulary match missing card content",
+                false,
             )
         })?;
 
-    let parsed = serde_json::from_str::<LexiResultV1>(&content_json).map_err(|error| {
+    let parsed = serde_json::from_str::<LexiResultV1>(content_json).map_err(|error| {
         AppError::invalid_model_output(format!("cached card parse failed: {error}"))
     })?;
     Ok(Some(parsed.validate()?))
@@ -596,18 +630,18 @@ fn save_word_study_result_to_connection(
     let result = align_result_to_canonical(result, &canonical_text);
 
     let content_json = serde_json::to_string(&result).map_err(|error| {
-        AppError::provider_request_failed(
+        AppError::vocabulary_store_failed(
             format!("vocabulary card serialize failed: {error}"),
             false,
         )
     })?;
     let provider_json = serde_json::to_string(&provider).map_err(|error| {
-        AppError::provider_request_failed(format!("provider serialize failed: {error}"), false)
+        AppError::vocabulary_store_failed(format!("provider serialize failed: {error}"), false)
     })?;
     let operation_id = new_operation_id();
 
     let tx = connection.transaction().map_err(|error| {
-        AppError::provider_request_failed(format!("vocabulary transaction failed: {error}"), true)
+        AppError::vocabulary_store_failed(format!("vocabulary transaction failed: {error}"), true)
     })?;
 
     tx.execute(
@@ -627,7 +661,7 @@ fn save_word_study_result_to_connection(
         ],
     )
     .map_err(|error| {
-        AppError::provider_request_failed(format!("vocabulary lexeme insert failed: {error}"), true)
+        AppError::vocabulary_store_failed(format!("vocabulary lexeme insert failed: {error}"), true)
     })?;
 
     tx.execute(
@@ -650,7 +684,7 @@ fn save_word_study_result_to_connection(
         ],
     )
     .map_err(|error| {
-        AppError::provider_request_failed(format!("vocabulary lexeme update failed: {error}"), true)
+        AppError::vocabulary_store_failed(format!("vocabulary lexeme update failed: {error}"), true)
     })?;
 
     let lexeme_id = tx
@@ -660,57 +694,27 @@ fn save_word_study_result_to_connection(
             |row| row.get::<_, String>(0),
         )
         .map_err(|error| {
-            AppError::provider_request_failed(format!("vocabulary lexeme lookup failed: {error}"), true)
+            AppError::vocabulary_store_failed(format!("vocabulary lexeme lookup failed: {error}"), true)
         })?;
 
-    insert_form(
+    ensure_lexeme_forms(
         &tx,
         &user_id,
         &lexeme_id,
         &canonical_text,
-        "canonical",
-        "provider",
+        &canonical_key,
+        &result,
+        EnsureLexemeFormsOptions {
+            observed_text: Some(selected_text),
+        },
     )?;
-
-    let observed_key = normalize_lookup_key(selected_text);
-    let observed_matches_inflection = result
-        .inflections
-        .iter()
-        .any(|inflection| normalize_lookup_key(&inflection.form) == observed_key);
-    if !observed_key.is_empty() && observed_key != canonical_key && !observed_matches_inflection {
-        insert_form(
-            &tx,
-            &user_id,
-            &lexeme_id,
-            selected_text,
-            "observed",
-            "capture",
-        )?;
-    }
-
-    for inflection in &result.inflections {
-        insert_inflection_form(&tx, &user_id, &lexeme_id, inflection)?;
-    }
-
-    if is_verb_lexeme(&result) {
-        for form_text in regular_verb_surface_forms(&canonical_text) {
-            insert_form(
-                &tx,
-                &user_id,
-                &lexeme_id,
-                &form_text,
-                "regular",
-                "generated",
-            )?;
-        }
-    }
 
     tx.execute(
         "update card_snapshots set active = 0 where user_id = ?1 and lexeme_id = ?2 and result_language = ?3",
         params![user_id, lexeme_id, result.result_language],
     )
     .map_err(|error| {
-        AppError::provider_request_failed(format!("vocabulary snapshot deactivate failed: {error}"), true)
+        AppError::vocabulary_store_failed(format!("vocabulary snapshot deactivate failed: {error}"), true)
     })?;
 
     tx.execute(
@@ -730,7 +734,7 @@ fn save_word_study_result_to_connection(
         ],
     )
     .map_err(|error| {
-        AppError::provider_request_failed(
+        AppError::vocabulary_store_failed(
             format!("vocabulary snapshot insert failed: {error}"),
             true,
         )
@@ -752,7 +756,7 @@ fn save_word_study_result_to_connection(
         "forms": forms,
     });
     let mutation_payload_json = serde_json::to_string(&mutation_payload).map_err(|error| {
-        AppError::provider_request_failed(
+        AppError::vocabulary_store_failed(
             format!("vocabulary mutation serialize failed: {error}"),
             false,
         )
@@ -767,14 +771,14 @@ fn save_word_study_result_to_connection(
         params![user_id, operation_id, mutation_payload_json],
     )
     .map_err(|error| {
-        AppError::provider_request_failed(
+        AppError::vocabulary_store_failed(
             format!("vocabulary mutation enqueue failed: {error}"),
             true,
         )
     })?;
 
     tx.commit().map_err(|error| {
-        AppError::provider_request_failed(
+        AppError::vocabulary_store_failed(
             format!("vocabulary transaction commit failed: {error}"),
             true,
         )
@@ -843,6 +847,152 @@ fn regular_verb_surface_forms(headword: &str) -> Vec<String> {
     vec![third_person, format!("{base}ed"), format!("{base}ing")]
 }
 
+#[derive(Debug, Clone, Copy, Default)]
+pub(crate) struct EnsureLexemeFormsOptions<'a> {
+    pub observed_text: Option<&'a str>,
+}
+
+/// Ensures lookup aliases exist for a lexeme: canonical, optional observed capture,
+/// irregular forms from card inflections, and generated regular verb surfaces.
+pub(crate) fn ensure_lexeme_forms(
+    connection: &Connection,
+    user_id: &str,
+    lexeme_id: &str,
+    canonical_text: &str,
+    canonical_key: &str,
+    result: &LexiResultV1,
+    options: EnsureLexemeFormsOptions<'_>,
+) -> Result<(), AppError> {
+    insert_form(
+        connection,
+        user_id,
+        lexeme_id,
+        canonical_text,
+        "canonical",
+        "provider",
+    )?;
+
+    if let Some(observed_text) = options.observed_text {
+        let observed_key = normalize_lookup_key(observed_text);
+        let observed_matches_inflection = result.inflections.iter().any(|inflection| {
+            normalize_lookup_key(&inflection.form) == observed_key
+        });
+        if !observed_key.is_empty()
+            && observed_key != canonical_key
+            && !observed_matches_inflection
+        {
+            insert_form(
+                connection,
+                user_id,
+                lexeme_id,
+                observed_text,
+                "observed",
+                "capture",
+            )?;
+        }
+    }
+
+    for inflection in &result.inflections {
+        insert_inflection_form(connection, user_id, lexeme_id, inflection)?;
+    }
+
+    if is_verb_lexeme(result) {
+        for form_text in regular_verb_surface_forms(canonical_text) {
+            insert_form(
+                connection,
+                user_id,
+                lexeme_id,
+                &form_text,
+                "regular",
+                "generated",
+            )?;
+        }
+    }
+
+    Ok(())
+}
+
+pub(crate) fn ensure_lexeme_forms_from_content_json(
+    connection: &Connection,
+    user_id: &str,
+    lexeme_id: &str,
+    canonical_text: &str,
+    canonical_key: &str,
+    content_json: &str,
+    options: EnsureLexemeFormsOptions<'_>,
+) -> Result<(), AppError> {
+    let result = serde_json::from_str::<LexiResultV1>(content_json).map_err(|error| {
+        AppError::vocabulary_store_failed(format!("card content parse failed: {error}"), false)
+    })?;
+    ensure_lexeme_forms(
+        connection,
+        user_id,
+        lexeme_id,
+        canonical_text,
+        canonical_key,
+        &result,
+        options,
+    )
+}
+
+/// Backfills missing `lexeme_forms` rows for every active card in the local replica.
+pub(crate) fn repair_lexeme_forms_for_active_cards(connection: &Connection) -> Result<(), AppError> {
+    let mut statement = connection
+        .prepare(
+            r#"
+            select distinct cs.user_id, cs.lexeme_id, ul.canonical_text, ul.canonical_key, cs.content_json
+            from card_snapshots cs
+            inner join user_lexemes ul on ul.id = cs.lexeme_id
+            where cs.active = 1
+              and ul.deleted_at is null
+            "#,
+        )
+        .map_err(|error| {
+            AppError::vocabulary_store_failed(
+                format!("lexeme form repair prepare failed: {error}"),
+                true,
+            )
+        })?;
+
+    let rows = statement
+        .query_map([], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, String>(2)?,
+                row.get::<_, String>(3)?,
+                row.get::<_, String>(4)?,
+            ))
+        })
+        .map_err(|error| {
+            AppError::vocabulary_store_failed(
+                format!("lexeme form repair query failed: {error}"),
+                true,
+            )
+        })?;
+
+    for row in rows {
+        let (user_id, lexeme_id, canonical_text, canonical_key, content_json) =
+            row.map_err(|error| {
+                AppError::vocabulary_store_failed(
+                    format!("lexeme form repair row failed: {error}"),
+                    true,
+                )
+            })?;
+        ensure_lexeme_forms_from_content_json(
+            connection,
+            &user_id,
+            &lexeme_id,
+            &canonical_text,
+            &canonical_key,
+            &content_json,
+            EnsureLexemeFormsOptions::default(),
+        )?;
+    }
+
+    Ok(())
+}
+
 fn insert_form(
     connection: &Connection,
     user_id: &str,
@@ -866,7 +1016,7 @@ fn insert_form(
             params![user_id, lexeme_id, form_text, form_key, relation, source],
         )
         .map_err(|error| {
-            AppError::provider_request_failed(
+            AppError::vocabulary_store_failed(
                 format!("vocabulary form insert failed: {error}"),
                 true,
             )
@@ -925,7 +1075,7 @@ fn collect_forms_for_lexeme(
             "#,
         )
         .map_err(|error| {
-            AppError::provider_request_failed(
+            AppError::vocabulary_store_failed(
                 format!("vocabulary form collect prepare failed: {error}"),
                 true,
             )
@@ -941,14 +1091,14 @@ fn collect_forms_for_lexeme(
             })
         })
         .map_err(|error| {
-            AppError::provider_request_failed(
+            AppError::vocabulary_store_failed(
                 format!("vocabulary form collect query failed: {error}"),
                 true,
             )
         })?;
 
     rows.collect::<Result<Vec<_>, _>>().map_err(|error| {
-        AppError::provider_request_failed(
+        AppError::vocabulary_store_failed(
             format!("vocabulary form collect row failed: {error}"),
             true,
         )
@@ -974,7 +1124,7 @@ pub fn list_pending_mutations(
             "#,
         )
         .map_err(|error| {
-            AppError::provider_request_failed(
+            AppError::vocabulary_store_failed(
                 format!("vocabulary outbox prepare failed: {error}"),
                 true,
             )
@@ -991,14 +1141,14 @@ pub fn list_pending_mutations(
             })
         })
         .map_err(|error| {
-            AppError::provider_request_failed(
+            AppError::vocabulary_store_failed(
                 format!("vocabulary outbox query failed: {error}"),
                 true,
             )
         })?;
 
     rows.collect::<Result<Vec<_>, _>>().map_err(|error| {
-        AppError::provider_request_failed(format!("vocabulary outbox row failed: {error}"), true)
+        AppError::vocabulary_store_failed(format!("vocabulary outbox row failed: {error}"), true)
     })
 }
 
@@ -1017,7 +1167,7 @@ pub fn count_pending_mutations(app: &AppHandle) -> Result<u32, AppError> {
         )
         .map(|count| count.max(0) as u32)
         .map_err(|error| {
-            AppError::provider_request_failed(
+            AppError::vocabulary_store_failed(
                 format!("vocabulary outbox count failed: {error}"),
                 true,
             )
@@ -1044,13 +1194,13 @@ pub fn acknowledge_mutation(
             params![user_id, operation_id, server_revision],
         )
         .map_err(|error| {
-            AppError::provider_request_failed(
+            AppError::vocabulary_store_failed(
                 format!("vocabulary outbox ack failed: {error}"),
                 true,
             )
         })?;
     if changed == 0 {
-        return Err(AppError::provider_request_failed(
+        return Err(AppError::vocabulary_store_failed(
             format!("vocabulary outbox ack did not match operation {operation_id}"),
             false,
         ));
@@ -1089,13 +1239,13 @@ pub fn fail_mutation(
             ],
         )
         .map_err(|err| {
-            AppError::provider_request_failed(
+            AppError::vocabulary_store_failed(
                 format!("vocabulary outbox fail update failed: {err}"),
                 true,
             )
         })?;
     if changed == 0 {
-        return Err(AppError::provider_request_failed(
+        return Err(AppError::vocabulary_store_failed(
             format!("vocabulary outbox failure did not match operation {operation_id}"),
             false,
         ));
@@ -1114,7 +1264,7 @@ pub fn get_last_server_revision(app: &AppHandle) -> Result<i64, AppError> {
         )
         .optional()
         .map_err(|error| {
-            AppError::provider_request_failed(
+            AppError::vocabulary_store_failed(
                 format!("vocabulary sync state read failed: {error}"),
                 true,
             )
@@ -1138,7 +1288,7 @@ pub fn set_last_server_revision(app: &AppHandle, revision: i64) -> Result<(), Ap
             params![scope, revision],
         )
         .map_err(|error| {
-            AppError::provider_request_failed(
+            AppError::vocabulary_store_failed(
                 format!("vocabulary sync state write failed: {error}"),
                 true,
             )
@@ -1166,7 +1316,7 @@ pub fn migrate_local_rows_to_user(app: &AppHandle, user_id: &str) -> Result<(), 
                 params![user_id, LOCAL_USER_ID],
             )
             .map_err(|error| {
-                AppError::provider_request_failed(
+                AppError::vocabulary_store_failed(
                     format!("vocabulary user migration failed for {table}: {error}"),
                     true,
                 )
@@ -1189,6 +1339,14 @@ pub fn apply_pulled_change(app: &AppHandle, change: &PulledChange) -> Result<(),
         return Ok(());
     }
 
+    apply_pulled_card_snapshot_to_connection(&mut connection, &user_id, change)
+}
+
+pub(crate) fn apply_pulled_card_snapshot_to_connection(
+    connection: &mut Connection,
+    user_id: &str,
+    change: &PulledChange,
+) -> Result<(), AppError> {
     let payload = &change.payload;
     let language = payload
         .get("language")
@@ -1198,25 +1356,25 @@ pub fn apply_pulled_change(app: &AppHandle, change: &PulledChange) -> Result<(),
         .get("canonicalText")
         .and_then(|value| value.as_str())
         .ok_or_else(|| {
-            AppError::provider_request_failed("pull payload missing canonicalText", false)
+            AppError::vocabulary_store_failed("pull payload missing canonicalText", false)
         })?;
     let canonical_key = payload
         .get("canonicalKey")
         .and_then(|value| value.as_str())
         .ok_or_else(|| {
-            AppError::provider_request_failed("pull payload missing canonicalKey", false)
+            AppError::vocabulary_store_failed("pull payload missing canonicalKey", false)
         })?;
     let result_language = payload
         .get("resultLanguage")
         .and_then(|value| value.as_str())
         .ok_or_else(|| {
-            AppError::provider_request_failed("pull payload missing resultLanguage", false)
+            AppError::vocabulary_store_failed("pull payload missing resultLanguage", false)
         })?;
     let schema_version = payload
         .get("schemaVersion")
         .and_then(|value| value.as_str())
         .ok_or_else(|| {
-            AppError::provider_request_failed("pull payload missing schemaVersion", false)
+            AppError::vocabulary_store_failed("pull payload missing schemaVersion", false)
         })?;
     let provider = payload
         .get("provider")
@@ -1228,9 +1386,9 @@ pub fn apply_pulled_change(app: &AppHandle, change: &PulledChange) -> Result<(),
         .unwrap_or("");
     let content = payload
         .get("content")
-        .ok_or_else(|| AppError::provider_request_failed("pull payload missing content", false))?;
+        .ok_or_else(|| AppError::vocabulary_store_failed("pull payload missing content", false))?;
     let content_json = serde_json::to_string(content).map_err(|error| {
-        AppError::provider_request_failed(format!("pull content serialize failed: {error}"), false)
+        AppError::vocabulary_store_failed(format!("pull content serialize failed: {error}"), false)
     })?;
     let part_of_speech = content
         .get("translations")
@@ -1240,7 +1398,7 @@ pub fn apply_pulled_change(app: &AppHandle, change: &PulledChange) -> Result<(),
         .and_then(|value| value.as_str());
 
     let tx = connection.transaction().map_err(|error| {
-        AppError::provider_request_failed(format!("pull apply transaction failed: {error}"), true)
+        AppError::vocabulary_store_failed(format!("pull apply transaction failed: {error}"), true)
     })?;
 
     tx.execute(
@@ -1258,28 +1416,28 @@ pub fn apply_pulled_change(app: &AppHandle, change: &PulledChange) -> Result<(),
         ],
     )
     .map_err(|error| {
-        AppError::provider_request_failed(format!("pull lexeme insert failed: {error}"), true)
+        AppError::vocabulary_store_failed(format!("pull lexeme insert failed: {error}"), true)
     })?;
 
     tx.execute(
         r#"
         update user_lexemes
         set canonical_text = ?3,
-            part_of_speech = coalesce(?4, part_of_speech),
+            part_of_speech = coalesce(?5, part_of_speech),
             updated_at = datetime('now'),
             deleted_at = null
-        where user_id = ?1 and language = ?2 and canonical_key = ?3
+        where user_id = ?1 and language = ?2 and canonical_key = ?4
         "#,
         params![
             user_id,
             language,
-            canonical_key,
             canonical_text,
+            canonical_key,
             part_of_speech
         ],
     )
     .map_err(|error| {
-        AppError::provider_request_failed(format!("pull lexeme update failed: {error}"), true)
+        AppError::vocabulary_store_failed(format!("pull lexeme update failed: {error}"), true)
     })?;
 
     let lexeme_id = tx
@@ -1289,7 +1447,7 @@ pub fn apply_pulled_change(app: &AppHandle, change: &PulledChange) -> Result<(),
             |row| row.get::<_, String>(0),
         )
         .map_err(|error| {
-            AppError::provider_request_failed(format!("pull lexeme lookup failed: {error}"), true)
+            AppError::vocabulary_store_failed(format!("pull lexeme lookup failed: {error}"), true)
         })?;
 
     if let Some(forms) = payload.get("forms").and_then(|value| value.as_array()) {
@@ -1315,7 +1473,7 @@ pub fn apply_pulled_change(app: &AppHandle, change: &PulledChange) -> Result<(),
         params![user_id, lexeme_id, result_language],
     )
     .map_err(|error| {
-        AppError::provider_request_failed(format!("pull snapshot deactivate failed: {error}"), true)
+        AppError::vocabulary_store_failed(format!("pull snapshot deactivate failed: {error}"), true)
     })?;
 
     tx.execute(
@@ -1338,11 +1496,21 @@ pub fn apply_pulled_change(app: &AppHandle, change: &PulledChange) -> Result<(),
         ],
     )
     .map_err(|error| {
-        AppError::provider_request_failed(format!("pull snapshot insert failed: {error}"), true)
+        AppError::vocabulary_store_failed(format!("pull snapshot insert failed: {error}"), true)
     })?;
 
+    ensure_lexeme_forms_from_content_json(
+        &tx,
+        user_id,
+        &lexeme_id,
+        canonical_text,
+        canonical_key,
+        &content_json,
+        EnsureLexemeFormsOptions::default(),
+    )?;
+
     tx.commit().map_err(|error| {
-        AppError::provider_request_failed(format!("pull apply commit failed: {error}"), true)
+        AppError::vocabulary_store_failed(format!("pull apply commit failed: {error}"), true)
     })
 }
 
@@ -1367,7 +1535,7 @@ fn pulled_change_already_applied(
         )
         .map(|exists| exists != 0)
         .map_err(|error| {
-            AppError::provider_request_failed(format!("pull duplicate check failed: {error}"), true)
+            AppError::vocabulary_store_failed(format!("pull duplicate check failed: {error}"), true)
         })
 }
 
@@ -1392,7 +1560,7 @@ fn local_mutation_already_acknowledged(
         )
         .map(|exists| exists != 0)
         .map_err(|error| {
-            AppError::provider_request_failed(
+            AppError::vocabulary_store_failed(
                 format!("pull own-mutation check failed: {error}"),
                 true,
             )
@@ -1402,9 +1570,12 @@ fn local_mutation_already_acknowledged(
 #[cfg(test)]
 mod tests {
     use super::{
-        effective_user_id, initialize_schema, load_cached_word_study_from_connection,
-        local_mutation_already_acknowledged, normalize_lookup_key, pulled_change_already_applied,
-        save_word_study_result_to_connection, sync_scope_key, PulledChange,
+        apply_pulled_card_snapshot_to_connection, effective_user_id, ensure_lexeme_forms,
+        ensure_lexeme_forms_from_content_json, initialize_schema,
+        load_cached_word_study_from_connection, local_mutation_already_acknowledged,
+        normalize_lookup_key, pulled_change_already_applied,
+        repair_lexeme_forms_for_active_cards, save_word_study_result_to_connection,
+        sync_scope_key, EnsureLexemeFormsOptions, PulledChange,
     };
     use crate::{
         schema::{
@@ -1469,6 +1640,65 @@ mod tests {
             selected_text,
         )
         .expect("save result");
+    }
+
+    fn form_count_for_lexeme(
+        connection: &Connection,
+        lexeme_id: &str,
+        relation: Option<&str>,
+    ) -> i64 {
+        match relation {
+            Some(relation) => connection
+                .query_row(
+                    "select count(*) from lexeme_forms where lexeme_id = ?1 and relation = ?2",
+                    params![lexeme_id, relation],
+                    |row| row.get(0),
+                )
+                .expect("form count"),
+            None => connection
+                .query_row(
+                    "select count(*) from lexeme_forms where lexeme_id = ?1",
+                    params![lexeme_id],
+                    |row| row.get(0),
+                )
+                .expect("form count"),
+        }
+    }
+
+    fn go_pull_payload(include_forms: bool) -> serde_json::Value {
+        let mut payload = serde_json::json!({
+            "schemaVersion": LEXI_RESULT_V1_SCHEMA_VERSION,
+            "language": "en",
+            "resultLanguage": "ja",
+            "canonicalText": "go",
+            "canonicalKey": "go",
+            "provider": "mock",
+            "model": "mock-word-study",
+            "content": {
+                "schemaVersion": LEXI_RESULT_V1_SCHEMA_VERSION,
+                "mode": "word-study",
+                "sourceLanguage": "en",
+                "resultLanguage": "ja",
+                "headword": "go",
+                "inflections": [{ "kind": "past", "form": "went" }],
+                "translations": [{
+                    "text": "行く",
+                    "note": "動詞",
+                    "example": { "sentence": "I go.", "japanese": "行く。" }
+                }],
+                "nuance": "Usage nuance.",
+                "synonyms": [],
+                "idioms": [],
+                "warnings": []
+            }
+        });
+        if include_forms {
+            payload["forms"] = serde_json::json!([
+                { "formText": "go", "relation": "canonical", "source": "provider" },
+                { "formText": "went", "relation": "irregular", "source": "provider" }
+            ]);
+        }
+        payload
     }
 
     fn relations_for_form_key(connection: &Connection, form_key: &str) -> Vec<(String, String)> {
@@ -1938,6 +2168,333 @@ mod tests {
             .expect("insert snapshot");
 
         let cached = load_cached_word_study_from_connection(&connection, "went", "ja")
+            .expect("cache lookup")
+            .expect("cached card");
+        assert_eq!(cached.headword, "go");
+    }
+
+    #[test]
+    fn pull_lexeme_update_sql_uses_canonical_key_in_where_clause() {
+        let connection = Connection::open_in_memory().expect("memory sqlite");
+        initialize_schema(&connection).expect("schema");
+        let user_id = effective_user_id();
+
+        connection
+            .execute(
+                r#"
+                insert into user_lexemes (
+                  user_id, language, canonical_text, canonical_key
+                ) values (?1, 'en', 'old-text', 'gain')
+                "#,
+                params![user_id],
+            )
+            .expect("insert lexeme");
+
+        connection
+            .execute(
+                r#"
+                update user_lexemes
+                set canonical_text = ?3,
+                    part_of_speech = coalesce(?5, part_of_speech),
+                    updated_at = datetime('now'),
+                    deleted_at = null
+                where user_id = ?1 and language = ?2 and canonical_key = ?4
+                "#,
+                params![user_id, "en", "gain", "gain", "動詞"],
+            )
+            .expect("update lexeme");
+
+        let canonical_text: String = connection
+            .query_row(
+                "select canonical_text from user_lexemes where canonical_key = 'gain'",
+                [],
+                |row| row.get(0),
+            )
+            .expect("canonical text");
+        assert_eq!(canonical_text, "gain");
+    }
+
+    #[test]
+    fn ensure_lexeme_forms_adds_canonical_irregular_and_regular() {
+        let connection = Connection::open_in_memory().expect("memory sqlite");
+        initialize_schema(&connection).expect("schema");
+        let user_id = effective_user_id();
+        let (result, _) = go_with_went_inflection();
+
+        connection
+            .execute(
+                r#"
+                insert into user_lexemes (
+                  id, user_id, language, canonical_text, canonical_key
+                ) values ('lexeme-go', ?1, 'en', 'go', 'go')
+                "#,
+                params![user_id],
+            )
+            .expect("insert lexeme");
+
+        ensure_lexeme_forms(
+            &connection,
+            &user_id,
+            "lexeme-go",
+            "go",
+            "go",
+            &result,
+            EnsureLexemeFormsOptions::default(),
+        )
+        .expect("ensure forms");
+
+        assert!(relations_for_form_key(&connection, "go")
+            .iter()
+            .any(|(_, relation)| relation == "canonical"));
+        assert_eq!(
+            relations_for_form_key(&connection, "went"),
+            vec![("go".to_string(), "irregular".to_string())]
+        );
+        assert!(relations_for_form_key(&connection, "going")
+            .iter()
+            .any(|(_, relation)| relation == "regular"));
+    }
+
+    #[test]
+    fn ensure_lexeme_forms_is_idempotent() {
+        let connection = Connection::open_in_memory().expect("memory sqlite");
+        initialize_schema(&connection).expect("schema");
+        let user_id = effective_user_id();
+        let (result, _) = go_with_went_inflection();
+
+        connection
+            .execute(
+                r#"
+                insert into user_lexemes (
+                  id, user_id, language, canonical_text, canonical_key
+                ) values ('lexeme-go', ?1, 'en', 'go', 'go')
+                "#,
+                params![user_id],
+            )
+            .expect("insert lexeme");
+
+        let options = EnsureLexemeFormsOptions::default();
+        for _ in 0..2 {
+            ensure_lexeme_forms(
+                &connection,
+                &user_id,
+                "lexeme-go",
+                "go",
+                "go",
+                &result,
+                options,
+            )
+            .expect("ensure forms");
+        }
+
+        let total = form_count_for_lexeme(&connection, "lexeme-go", None);
+        assert!(total >= 4);
+        let second_pass = form_count_for_lexeme(&connection, "lexeme-go", None);
+        ensure_lexeme_forms(
+            &connection,
+            &user_id,
+            "lexeme-go",
+            "go",
+            "go",
+            &result,
+            options,
+        )
+        .expect("ensure forms again");
+        assert_eq!(
+            form_count_for_lexeme(&connection, "lexeme-go", None),
+            second_pass
+        );
+    }
+
+    #[test]
+    fn apply_pulled_change_ensures_forms_when_payload_forms_omitted() {
+        let mut connection = Connection::open_in_memory().expect("memory sqlite");
+        initialize_schema(&connection).expect("schema");
+        let user_id = effective_user_id();
+
+        let change = PulledChange {
+            server_revision: 7,
+            operation_id: "33333333-3333-4333-8333-333333333333".to_string(),
+            entity_type: "card_snapshot".to_string(),
+            change_type: "upsert".to_string(),
+            payload: go_pull_payload(false),
+        };
+
+        apply_pulled_card_snapshot_to_connection(&mut connection, &user_id, &change)
+            .expect("apply pull");
+
+        assert!(relations_for_form_key(&connection, "go")
+            .iter()
+            .any(|(_, relation)| relation == "canonical"));
+        assert_eq!(
+            relations_for_form_key(&connection, "went"),
+            vec![("go".to_string(), "irregular".to_string())]
+        );
+        assert!(relations_for_form_key(&connection, "going")
+            .iter()
+            .any(|(_, relation)| relation == "regular"));
+    }
+
+    #[test]
+    fn apply_pulled_change_went_resolves_without_forms_array() {
+        let mut connection = Connection::open_in_memory().expect("memory sqlite");
+        initialize_schema(&connection).expect("schema");
+        let user_id = effective_user_id();
+
+        let change = PulledChange {
+            server_revision: 8,
+            operation_id: "44444444-4444-4444-8444-444444444444".to_string(),
+            entity_type: "card_snapshot".to_string(),
+            change_type: "upsert".to_string(),
+            payload: go_pull_payload(false),
+        };
+        apply_pulled_card_snapshot_to_connection(&mut connection, &user_id, &change)
+            .expect("apply pull");
+
+        let cached = load_cached_word_study_from_connection(&connection, "went", "ja")
+            .expect("cache lookup")
+            .expect("cached card");
+        assert_eq!(cached.headword, "go");
+    }
+
+    #[test]
+    fn repair_lexeme_forms_backfills_lexeme_and_card_only() {
+        let connection = Connection::open_in_memory().expect("memory sqlite");
+        initialize_schema(&connection).expect("schema");
+        let user_id = effective_user_id();
+
+        connection
+            .execute(
+                r#"
+                insert into user_lexemes (
+                  id, user_id, language, canonical_text, canonical_key
+                ) values ('lexeme-go', ?1, 'en', 'go', 'go')
+                "#,
+                params![user_id],
+            )
+            .expect("insert lexeme");
+
+        let content = go_pull_payload(false)["content"].clone();
+        connection
+            .execute(
+                r#"
+                insert into card_snapshots (
+                  user_id, lexeme_id, schema_version, result_language, content_json, active
+                ) values (?1, 'lexeme-go', ?2, 'ja', ?3, 1)
+                "#,
+                params![
+                    user_id,
+                    LEXI_RESULT_V1_SCHEMA_VERSION,
+                    content.to_string()
+                ],
+            )
+            .expect("insert snapshot");
+
+        assert_eq!(form_count_for_lexeme(&connection, "lexeme-go", None), 0);
+
+        repair_lexeme_forms_for_active_cards(&connection).expect("repair forms");
+
+        assert_eq!(form_count_for_lexeme(&connection, "lexeme-go", Some("canonical")), 1);
+        assert_eq!(form_count_for_lexeme(&connection, "lexeme-go", Some("irregular")), 1);
+        assert!(form_count_for_lexeme(&connection, "lexeme-go", Some("regular")) >= 3);
+
+        let cached = load_cached_word_study_from_connection(&connection, "went", "ja")
+            .expect("cache lookup")
+            .expect("cached card");
+        assert_eq!(cached.headword, "go");
+    }
+
+    #[test]
+    fn ensure_lexeme_forms_from_content_json_matches_struct_path() {
+        let connection = Connection::open_in_memory().expect("memory sqlite");
+        initialize_schema(&connection).expect("schema");
+        let user_id = effective_user_id();
+        let (result, _) = go_with_went_inflection();
+        let content_json = serde_json::to_string(&result).expect("serialize");
+
+        connection
+            .execute(
+                r#"
+                insert into user_lexemes (
+                  id, user_id, language, canonical_text, canonical_key
+                ) values ('lexeme-go', ?1, 'en', 'go', 'go')
+                "#,
+                params![user_id],
+            )
+            .expect("insert lexeme");
+
+        ensure_lexeme_forms_from_content_json(
+            &connection,
+            &user_id,
+            "lexeme-go",
+            "go",
+            "go",
+            &content_json,
+            EnsureLexemeFormsOptions::default(),
+        )
+        .expect("ensure from json");
+
+        assert_eq!(
+            relations_for_form_key(&connection, "went"),
+            vec![("go".to_string(), "irregular".to_string())]
+        );
+    }
+
+    #[test]
+    fn loads_cached_card_by_canonical_key_without_lexeme_form_row() {
+        let connection = Connection::open_in_memory().expect("memory sqlite");
+        initialize_schema(&connection).expect("schema");
+        let user_id = effective_user_id();
+
+        connection
+            .execute(
+                r#"
+                insert into user_lexemes (
+                  id, user_id, language, canonical_text, canonical_key
+                ) values ('lexeme-go', ?1, 'en', 'go', 'go')
+                "#,
+                params![user_id],
+            )
+            .expect("insert lexeme");
+
+        let content = serde_json::json!({
+            "schemaVersion": LEXI_RESULT_V1_SCHEMA_VERSION,
+            "mode": "word-study",
+            "sourceLanguage": "en",
+            "resultLanguage": "ja",
+            "headword": "go",
+            "inflections": [],
+            "translations": [{
+                "text": "行く",
+                "note": "動詞",
+                "example": { "sentence": "I go.", "japanese": "行く。" }
+            }],
+            "nuance": "Usage nuance.",
+            "synonyms": [],
+            "idioms": [],
+            "warnings": []
+        });
+        connection
+            .execute(
+                r#"
+                insert into card_snapshots (
+                  user_id, lexeme_id, schema_version, result_language, content_json, active
+                ) values (?1, 'lexeme-go', ?2, 'ja', ?3, 1)
+                "#,
+                params![user_id, LEXI_RESULT_V1_SCHEMA_VERSION, content.to_string()],
+            )
+            .expect("insert snapshot");
+
+        let form_count: i64 = connection
+            .query_row(
+                "select count(*) from lexeme_forms where form_key = 'go'",
+                [],
+                |row| row.get(0),
+            )
+            .expect("form count");
+        assert_eq!(form_count, 0);
+
+        let cached = load_cached_word_study_from_connection(&connection, "go", "ja")
             .expect("cache lookup")
             .expect("cached card");
         assert_eq!(cached.headword, "go");
