@@ -19,6 +19,7 @@ import App, {
   speakableHeadwordForState,
   type PopupState,
   type ProviderSettings,
+  type SyncStatus,
 } from "./App";
 import { SettingsView } from "./SettingsApp";
 
@@ -117,6 +118,19 @@ function renderPopup(
   return root;
 }
 
+function defaultSyncStatus(overrides: Partial<SyncStatus> = {}): SyncStatus {
+  return {
+    configured: true,
+    signedIn: true,
+    lifecycle: "idle",
+    pendingMutations: 0,
+    lastServerRevision: 0,
+    lastSyncAt: null,
+    lastError: null,
+    ...overrides,
+  };
+}
+
 function defaultProviderSettings(
   overrides: Partial<ProviderSettings> = {},
 ): ProviderSettings {
@@ -154,6 +168,7 @@ function renderSettingsView(
       <SettingsView
         settings={settings}
         syncAuthStatus={null}
+        syncStatus={defaultSyncStatus({ signedIn: false })}
         themeMode={options.themeMode ?? "light"}
         backgroundOpacity={
           typeof options.backgroundOpacity === "function"
@@ -1181,6 +1196,9 @@ describe("App stream flow", () => {
       if (command === "get_sync_auth_status") {
         return new Promise(() => undefined);
       }
+      if (command === "get_sync_status") {
+        return Promise.resolve(defaultSyncStatus({ signedIn: false }));
+      }
 
       return Promise.reject(new Error(`unexpected command ${command}`));
     });
@@ -1233,6 +1251,9 @@ describe("App stream flow", () => {
           userEmail: null,
           callbackUrl: "http://localhost:38271/auth/callback",
         });
+      }
+      if (command === "get_sync_status") {
+        return Promise.resolve(defaultSyncStatus({ signedIn: false }));
       }
 
       return Promise.reject(new Error(`unexpected command ${command}`));
@@ -1291,6 +1312,9 @@ describe("App stream flow", () => {
           userEmail: "lexi@example.com",
           callbackUrl: "http://localhost:38271/auth/callback",
         });
+      }
+      if (command === "get_sync_status") {
+        return Promise.resolve(defaultSyncStatus());
       }
       if (command === "run_transform_stream") {
         return Promise.resolve();
@@ -1389,6 +1413,9 @@ describe("App stream flow", () => {
           callbackUrl: "http://localhost:38271/auth/callback",
         });
       }
+      if (command === "get_sync_status") {
+        return Promise.resolve(defaultSyncStatus());
+      }
 
       return Promise.reject(new Error(`unexpected command ${command}`));
     });
@@ -1448,6 +1475,92 @@ describe("App stream flow", () => {
 
     expect(root.textContent).toContain("second");
     expect(root.textContent).not.toContain("subtle");
+
+    root.remove();
+  });
+
+  it("shows auth callback errors on the sign-in screen", async () => {
+    vi.mocked(invoke).mockImplementation((command) => {
+      if (command === "get_provider_settings") {
+        return Promise.resolve(defaultProviderSettings({ apiKeyConfigured: true }));
+      }
+      if (command === "get_shortcut_status") {
+        return Promise.resolve({
+          shortcut: DEFAULT_CAPTURE_SHORTCUT,
+          registered: true,
+          registrationError: null,
+        });
+      }
+      if (command === "get_sync_auth_status") {
+        return Promise.resolve({
+          configured: true,
+          signedIn: false,
+          userId: null,
+          userEmail: null,
+          callbackUrl: "http://localhost:38271/auth/callback",
+        });
+      }
+      if (command === "get_sync_status") {
+        return Promise.resolve(defaultSyncStatus({ signedIn: false }));
+      }
+      return Promise.reject(new Error(`unexpected command ${command}`));
+    });
+
+    const root = document.createElement("div");
+    document.body.appendChild(root);
+    render(() => <App />, root);
+    await Promise.resolve();
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(tauriMocks.listeners["lexi:sync-auth-error"]?.length).toBeGreaterThan(0);
+
+    for (const handler of tauriMocks.listeners["lexi:sync-auth-error"] ?? []) {
+      handler({
+        payload: {
+          code: "SyncAuthRequired",
+          userMessage: "Googleログインに失敗しました。",
+          diagnosticMessage: "callback rejected",
+          retryable: true,
+        },
+      });
+    }
+    await Promise.resolve();
+
+    expect(root.textContent).toContain("Googleログインに失敗しました。");
+
+    root.remove();
+  });
+
+  it("shows sync retry controls in settings when sync fails", () => {
+    const root = document.createElement("div");
+    document.body.appendChild(root);
+    render(
+      () => (
+        <SettingsView
+          settings={defaultProviderSettings()}
+          syncAuthStatus={{
+            configured: true,
+            signedIn: true,
+            userId: "user-1",
+            userEmail: "lexi@example.com",
+            callbackUrl: "http://localhost:38271/auth/callback",
+          }}
+          syncStatus={defaultSyncStatus({
+            lifecycle: "error",
+            lastError: "Vocabulary sync failed.",
+          })}
+          themeMode="light"
+          backgroundOpacity={0.94}
+          onSave={async () => undefined}
+          onRetrySync={async () => undefined}
+        />
+      ),
+      root,
+    );
+
+    expect(root.textContent).toContain("Vocabulary sync failed.");
+    expect(root.textContent).toContain("同期を再試行");
 
     root.remove();
   });

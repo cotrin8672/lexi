@@ -114,6 +114,18 @@ export type SyncAuthStatus = {
   callbackUrl: string;
 };
 
+export type SyncLifecycle = "idle" | "syncing" | "synced" | "error";
+
+export type SyncStatus = {
+  configured: boolean;
+  signedIn: boolean;
+  lifecycle: SyncLifecycle;
+  pendingMutations: number;
+  lastServerRevision: number;
+  lastSyncAt: string | null;
+  lastError: string | null;
+};
+
 export type SettingsUpdatedEvent = {
   settings: ProviderSettings;
   themeMode: ThemeMode;
@@ -206,6 +218,26 @@ const RESULT_LANGUAGE_OPTIONS = [
 export const DEFAULT_CAPTURE_SHORTCUT = "Ctrl+E";
 export const DEFAULT_CLOSE_SHORTCUT = "Escape";
 export const DEFAULT_PRONUNCIATION_SHORTCUT = "Ctrl+Shift+P";
+function syncStatusLabel(status: SyncStatus | null): string | null {
+  if (!status?.signedIn) {
+    return "同期はログイン後に有効です";
+  }
+
+  switch (status.lifecycle) {
+    case "syncing":
+      return "同期中…";
+    case "error":
+      return status.lastError ?? "前回の同期に失敗しました";
+    case "synced":
+      return status.pendingMutations > 0
+        ? `同期待ち: ${status.pendingMutations}件`
+        : "同期済み";
+    default:
+      return status.pendingMutations > 0
+        ? `同期待ち: ${status.pendingMutations}件`
+        : null;
+  }
+}
 const POPUP_WINDOW_SIZE = new LogicalSize(400, 700);
 const AUTH_WINDOW_SIZE = new LogicalSize(460, 560);
 const POPUP_MIN_SIZE = new LogicalSize(400, 360);
@@ -247,6 +279,7 @@ function App() {
     createSignal<ProviderSettings | null>(null);
   const [syncAuthStatus, setSyncAuthStatus] =
     createSignal<SyncAuthStatus | null>(null);
+  const [syncStatus, setSyncStatus] = createSignal<SyncStatus | null>(null);
   const [activeResultTab, setActiveResultTab] =
     createSignal<ResultTab>("meaning");
   const [themeMode, setThemeMode] = createSignal<ThemeMode>("light");
@@ -361,6 +394,7 @@ function App() {
     });
 
     void invoke<SyncAuthStatus>("get_sync_auth_status").then(setSyncAuthStatus);
+    void invoke<SyncStatus>("get_sync_status").then(setSyncStatus);
 
     void invoke<ShortcutStatus>("get_shortcut_status").then((status) => {
       if (status.registrationError) {
@@ -520,6 +554,15 @@ function App() {
 
     void listen<SyncAuthStatus>("lexi:sync-auth", (event) => {
       setSyncAuthStatus(event.payload);
+      void invoke<SyncStatus>("get_sync_status").then(setSyncStatus);
+    });
+
+    void listen<AppError>("lexi:sync-auth-error", () => {
+      void invoke<SyncAuthStatus>("get_sync_auth_status").then(setSyncAuthStatus);
+    });
+
+    void listen<SyncStatus>("lexi:sync-status", (event) => {
+      setSyncStatus(event.payload);
     });
 
     void listen<SettingsUpdatedEvent>("lexi:settings-updated", (event) => {
@@ -754,15 +797,41 @@ function AuthGate(props: {
   onStartGoogleSignIn?: () => Promise<void>;
 }) {
   const [signingIn, setSigningIn] = createSignal(false);
+  const [authError, setAuthError] = createSignal<string | null>(null);
+
+  onMount(() => {
+    let cleanupAuth: (() => void) | undefined;
+    let cleanupAuthError: (() => void) | undefined;
+
+    void listen<SyncAuthStatus>("lexi:sync-auth", () => {
+      setSigningIn(false);
+      setAuthError(null);
+    }).then((unlisten) => {
+      cleanupAuth = unlisten;
+    });
+
+    void listen<AppError>("lexi:sync-auth-error", (event) => {
+      setSigningIn(false);
+      setAuthError(event.payload.userMessage);
+    }).then((unlisten) => {
+      cleanupAuthError = unlisten;
+    });
+
+    return () => {
+      cleanupAuth?.();
+      cleanupAuthError?.();
+    };
+  });
 
   async function startGoogleSignIn() {
     setSigningIn(true);
+    setAuthError(null);
 
     try {
       await props.onStartGoogleSignIn?.();
     } catch {
-      // Keep the first-run screen quiet; configuration failures are not user-actionable here.
       setSigningIn(false);
+      setAuthError("Googleログインを開始できませんでした。");
     }
   }
 
@@ -803,6 +872,12 @@ function AuthGate(props: {
         </Show>
         {signingIn() ? "ログイン中" : "Googleでログイン"}
       </button>
+      <Show when={signingIn()}>
+        <p class="auth-status-note">ブラウザでログインを完了してください</p>
+      </Show>
+      <Show when={authError()}>
+        {(message) => <p class="settings-error auth-status-note">{message()}</p>}
+      </Show>
     </section>
   );
 }
@@ -819,10 +894,12 @@ function EmptyState(props: { shortcut: string }) {
 export function SettingsPanel(props: {
   settings: ProviderSettings;
   syncAuthStatus?: SyncAuthStatus | null;
+  syncStatus?: SyncStatus | null;
   themeMode: ThemeMode;
   backgroundOpacity: number;
   onSave: (update: ProviderSettingsUpdate) => Promise<void>;
   onSignOutSync?: () => Promise<void>;
+  onRetrySync?: () => Promise<void>;
   onToggleTheme: () => void;
   onSetBackgroundOpacity: (opacity: number) => void;
 }) {
@@ -1309,6 +1386,24 @@ export function SettingsPanel(props: {
               </button>
             </Show>
           </div>
+          <Show when={syncStatusLabel(props.syncStatus ?? null)}>
+            {(message) => <p class="settings-note">{message()}</p>}
+          </Show>
+          <Show
+            when={
+              props.syncStatus?.lifecycle === "error" && props.onRetrySync
+            }
+          >
+            <button
+              class="button sync-auth-button"
+              type="button"
+              onClick={() => {
+                void props.onRetrySync?.();
+              }}
+            >
+              同期を再試行
+            </button>
+          </Show>
         </div>
 
         <Show when={modelsWarning()}>

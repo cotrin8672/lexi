@@ -8,6 +8,7 @@ import {
   type ProviderSettingsUpdate,
   type SettingsUpdatedEvent,
   type SyncAuthStatus,
+  type SyncStatus,
   type ThemeMode,
 } from "./App";
 import "./App.css";
@@ -41,10 +42,12 @@ function buildSettingsUpdate(
 export function SettingsView(props: {
   settings: ProviderSettings;
   syncAuthStatus: SyncAuthStatus | null;
+  syncStatus: SyncStatus | null;
   themeMode: ThemeMode;
   backgroundOpacity: number;
   onSave: (update: ProviderSettingsUpdate) => Promise<void>;
   onSignOutSync?: () => Promise<void>;
+  onRetrySync?: () => Promise<void>;
   onToggleTheme: () => void;
   onSetBackgroundOpacity: (opacity: number) => void;
 }) {
@@ -53,10 +56,12 @@ export function SettingsView(props: {
       <SettingsPanel
         settings={props.settings}
         syncAuthStatus={props.syncAuthStatus}
+        syncStatus={props.syncStatus}
         themeMode={props.themeMode}
         backgroundOpacity={props.backgroundOpacity}
         onSave={props.onSave}
         onSignOutSync={props.onSignOutSync}
+        onRetrySync={props.onRetrySync}
         onToggleTheme={props.onToggleTheme}
         onSetBackgroundOpacity={props.onSetBackgroundOpacity}
       />
@@ -69,6 +74,7 @@ export default function SettingsApp() {
     createSignal<ProviderSettings | null>(null);
   const [syncAuthStatus, setSyncAuthStatus] =
     createSignal<SyncAuthStatus | null>(null);
+  const [syncStatus, setSyncStatus] = createSignal<SyncStatus | null>(null);
   const [themeMode, setThemeMode] = createSignal<ThemeMode>("light");
   const [backgroundOpacity, setBackgroundOpacity] = createSignal(0.94);
 
@@ -114,10 +120,19 @@ export default function SettingsApp() {
     await invoke("sign_out_sync");
     const status = await invoke<SyncAuthStatus>("get_sync_auth_status");
     setSyncAuthStatus(status);
+    const sync = await invoke<SyncStatus>("get_sync_status");
+    setSyncStatus(sync);
+  }
+
+  async function retrySync() {
+    await invoke("retry_sync");
+    const sync = await invoke<SyncStatus>("get_sync_status");
+    setSyncStatus(sync);
   }
 
   onMount(() => {
     let cleanupSyncAuth: (() => void) | undefined;
+    let cleanupSyncStatus: (() => void) | undefined;
 
     void invoke<ProviderSettings>("get_provider_settings").then((settings) => {
       setProviderSettings(settings);
@@ -126,15 +141,24 @@ export default function SettingsApp() {
     });
 
     void invoke<SyncAuthStatus>("get_sync_auth_status").then(setSyncAuthStatus);
+    void invoke<SyncStatus>("get_sync_status").then(setSyncStatus);
 
     void listen<SyncAuthStatus>("lexi:sync-auth", (event) => {
       setSyncAuthStatus(event.payload);
+      void invoke<SyncStatus>("get_sync_status").then(setSyncStatus);
     }).then((unlisten) => {
       cleanupSyncAuth = unlisten;
     });
 
+    void listen<SyncStatus>("lexi:sync-status", (event) => {
+      setSyncStatus(event.payload);
+    }).then((unlisten) => {
+      cleanupSyncStatus = unlisten;
+    });
+
     return () => {
       cleanupSyncAuth?.();
+      cleanupSyncStatus?.();
     };
   });
 
@@ -144,10 +168,12 @@ export default function SettingsApp() {
         <SettingsView
           settings={settings()}
           syncAuthStatus={syncAuthStatus()}
+          syncStatus={syncStatus()}
           themeMode={themeMode()}
           backgroundOpacity={backgroundOpacity()}
           onSave={saveProviderSettings}
           onSignOutSync={signOutSync}
+          onRetrySync={retrySync}
           onToggleTheme={() => {
             void toggleTheme();
           }}
