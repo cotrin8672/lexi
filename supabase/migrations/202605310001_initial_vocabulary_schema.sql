@@ -132,6 +132,10 @@ create index if not exists idx_card_snapshots_active
   on public.card_snapshots (user_id, lexeme_id, created_at desc)
   where active;
 
+create unique index if not exists idx_card_snapshots_one_active
+  on public.card_snapshots (user_id, lexeme_id, result_language)
+  where active;
+
 create index if not exists idx_vocabulary_changes_pull
   on public.vocabulary_changes (user_id, server_revision);
 

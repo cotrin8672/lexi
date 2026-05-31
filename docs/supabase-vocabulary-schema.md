@@ -164,6 +164,16 @@ can be relaxed to:
 user_id = auth.uid()
 ```
 
+## Sync RPCs
+
+Migration `202605310002_vocabulary_sync_rpcs.sql` adds:
+
+- `apply_vocabulary_mutation(envelope jsonb)` — idempotent push for `save_card_snapshot`
+- `pull_vocabulary_changes(since_revision bigint, batch_limit int)` — revision-based pull stream
+
+Both RPCs require an authenticated admin JWT and operate on rows scoped by
+`auth.uid()`.
+
 ## Privacy Boundary
 
 The schema stores validated structured vocabulary data and explicit user state.
