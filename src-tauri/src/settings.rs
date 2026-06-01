@@ -389,10 +389,7 @@ fn settings_path(app: &AppHandle) -> Result<PathBuf, AppError> {
 fn ensure_parent(path: &PathBuf) -> Result<(), AppError> {
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent).map_err(|error| {
-            AppError::settings_io_failed(
-                format!("app config dir create failed: {error}"),
-                true,
-            )
+            AppError::settings_io_failed(format!("app config dir create failed: {error}"), true)
         })?;
     }
 

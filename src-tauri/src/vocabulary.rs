@@ -874,12 +874,11 @@ pub(crate) fn ensure_lexeme_forms(
 
     if let Some(observed_text) = options.observed_text {
         let observed_key = normalize_lookup_key(observed_text);
-        let observed_matches_inflection = result.inflections.iter().any(|inflection| {
-            normalize_lookup_key(&inflection.form) == observed_key
-        });
-        if !observed_key.is_empty()
-            && observed_key != canonical_key
-            && !observed_matches_inflection
+        let observed_matches_inflection = result
+            .inflections
+            .iter()
+            .any(|inflection| normalize_lookup_key(&inflection.form) == observed_key);
+        if !observed_key.is_empty() && observed_key != canonical_key && !observed_matches_inflection
         {
             insert_form(
                 connection,
@@ -936,7 +935,9 @@ pub(crate) fn ensure_lexeme_forms_from_content_json(
 }
 
 /// Backfills missing `lexeme_forms` rows for every active card in the local replica.
-pub(crate) fn repair_lexeme_forms_for_active_cards(connection: &Connection) -> Result<(), AppError> {
+pub(crate) fn repair_lexeme_forms_for_active_cards(
+    connection: &Connection,
+) -> Result<(), AppError> {
     let mut statement = connection
         .prepare(
             r#"
@@ -1573,9 +1574,9 @@ mod tests {
         apply_pulled_card_snapshot_to_connection, effective_user_id, ensure_lexeme_forms,
         ensure_lexeme_forms_from_content_json, initialize_schema,
         load_cached_word_study_from_connection, local_mutation_already_acknowledged,
-        normalize_lookup_key, pulled_change_already_applied,
-        repair_lexeme_forms_for_active_cards, save_word_study_result_to_connection,
-        sync_scope_key, EnsureLexemeFormsOptions, PulledChange,
+        normalize_lookup_key, pulled_change_already_applied, repair_lexeme_forms_for_active_cards,
+        save_word_study_result_to_connection, sync_scope_key, EnsureLexemeFormsOptions,
+        PulledChange,
     };
     use crate::{
         schema::{
@@ -2382,11 +2383,7 @@ mod tests {
                   user_id, lexeme_id, schema_version, result_language, content_json, active
                 ) values (?1, 'lexeme-go', ?2, 'ja', ?3, 1)
                 "#,
-                params![
-                    user_id,
-                    LEXI_RESULT_V1_SCHEMA_VERSION,
-                    content.to_string()
-                ],
+                params![user_id, LEXI_RESULT_V1_SCHEMA_VERSION, content.to_string()],
             )
             .expect("insert snapshot");
 
@@ -2394,8 +2391,14 @@ mod tests {
 
         repair_lexeme_forms_for_active_cards(&connection).expect("repair forms");
 
-        assert_eq!(form_count_for_lexeme(&connection, "lexeme-go", Some("canonical")), 1);
-        assert_eq!(form_count_for_lexeme(&connection, "lexeme-go", Some("irregular")), 1);
+        assert_eq!(
+            form_count_for_lexeme(&connection, "lexeme-go", Some("canonical")),
+            1
+        );
+        assert_eq!(
+            form_count_for_lexeme(&connection, "lexeme-go", Some("irregular")),
+            1
+        );
         assert!(form_count_for_lexeme(&connection, "lexeme-go", Some("regular")) >= 3);
 
         let cached = load_cached_word_study_from_connection(&connection, "went", "ja")
