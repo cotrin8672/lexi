@@ -219,11 +219,123 @@ impl TextTranslationResultV1 {
 }
 
 pub fn parse_lexi_result_v1(raw_json: &str) -> Result<LexiResultV1, AppError> {
-    let result = serde_json::from_str::<LexiResultV1>(raw_json).map_err(|error| {
+    let mut result = serde_json::from_str::<LexiResultV1>(raw_json).map_err(|error| {
         AppError::invalid_model_output(format!("model output JSON parse failed: {error}"))
     })?;
 
+    normalize_provider_result(&mut result);
     result.validate()
+}
+
+fn normalize_provider_result(result: &mut LexiResultV1) {
+    trim_string(&mut result.schema_version);
+    trim_string(&mut result.mode);
+    trim_string(&mut result.source_language);
+    trim_string(&mut result.result_language);
+    trim_string(&mut result.headword);
+    trim_string(&mut result.nuance);
+
+    for translation in &mut result.translations {
+        trim_string(&mut translation.text);
+        trim_string(&mut translation.example.sentence);
+        trim_string(&mut translation.example.japanese);
+        if let Some(note) = translation.note.as_mut() {
+            trim_string(note);
+            normalize_translation_note(&mut translation.note);
+        }
+        if let Some(sense_kind) = translation.sense_kind.as_mut() {
+            trim_string(sense_kind);
+            if !TRANSLATION_SENSE_KIND_VALUES.contains(&sense_kind.as_str()) {
+                translation.sense_kind = None;
+            }
+        }
+
+        if let Some(base_word) = translation.base_word.as_mut() {
+            trim_string(base_word);
+            if base_word.trim().is_empty() {
+                translation.base_word = None;
+            }
+        }
+
+        if translation.sense_kind.as_deref() == Some("inflection") {
+            if translation.base_word.is_none() {
+                translation.base_word = infer_base_word_from_headword(&result.headword);
+            }
+            if translation.base_word.is_none() {
+                translation.sense_kind = None;
+            }
+        } else if translation.base_word.is_some() {
+            translation.base_word = None;
+        }
+    }
+}
+
+fn normalize_translation_note(note: &mut Option<String>) {
+    let Some(value) = note.as_mut() else {
+        return;
+    };
+
+    trim_string(value);
+    if value.is_empty() {
+        *note = None;
+        return;
+    }
+
+    let normalized = match value.trim().to_ascii_lowercase().as_str() {
+        "noun" | "n." | "n" => Some("名詞"),
+        "verb" | "v." | "v" => Some("動詞"),
+        "adjective" | "adj." | "adj" => Some("形容詞"),
+        "adverb" | "adv." | "adv" => Some("副詞"),
+        "preposition" | "prep." | "prep" => Some("前置詞"),
+        "conjunction" | "conj." | "conj" => Some("接続詞"),
+        "pronoun" | "pron." | "pron" => Some("代名詞"),
+        "auxiliary verb" | "auxiliary" | "aux." | "aux" => Some("助動詞"),
+        "article" | "art." | "art" => Some("冠詞"),
+        "interjection" | "int." | "int" => Some("間投詞"),
+        "phrase" => Some("句"),
+        "idiom" => Some("成句"),
+        "prefix" => Some("接頭辞"),
+        "suffix" => Some("接尾辞"),
+        _ => None,
+    };
+
+    if let Some(normalized) = normalized {
+        *value = normalized.to_string();
+    } else if !TRANSLATION_NOTE_VALUES.contains(&value.as_str()) {
+        *note = None;
+    }
+}
+
+fn trim_string(value: &mut String) {
+    let trimmed = value.trim();
+    if trimmed.len() != value.len() {
+        *value = trimmed.to_string();
+    }
+}
+
+fn infer_base_word_from_headword(headword: &str) -> Option<String> {
+    let headword = headword.trim();
+    if headword.is_empty() || headword.chars().count() > 48 {
+        return None;
+    }
+
+    let lower = headword.to_ascii_lowercase();
+    if lower.ends_with("ied") && headword.len() > 3 {
+        let stem = &headword[..headword.len() - 3];
+        return Some(format!("{stem}y"));
+    }
+    if lower.ends_with("ed") && headword.len() > 2 {
+        let stem = &headword[..headword.len() - 2];
+        if stem.ends_with('i') {
+            return Some(format!("{}y", &stem[..stem.len() - 1]));
+        }
+        return Some(stem.to_string());
+    }
+    if lower.ends_with("ing") && headword.len() > 3 {
+        return Some(headword[..headword.len() - 3].to_string());
+    }
+
+    None
 }
 
 fn validate_required(field: &str, value: &str) -> Result<(), AppError> {
@@ -396,6 +508,57 @@ mod tests {
         let result = valid_result().validate().expect("valid schema");
 
         assert_eq!(result.schema_version, LEXI_RESULT_V1_SCHEMA_VERSION);
+    }
+
+    #[test]
+    fn parse_normalizes_empty_model_base_word_before_validation() {
+        let mut result = valid_result();
+        result.translations[0].sense_kind = Some("inflection".to_string());
+        result.translations[0].base_word = Some(" ".to_string());
+        let raw_json = serde_json::to_string(&result).expect("result serializes");
+
+        let result = parse_lexi_result_v1(&raw_json)
+            .expect("empty model baseWord should fall back to dictionary sense");
+
+        assert_eq!(result.translations[0].sense_kind, None);
+        assert_eq!(result.translations[0].base_word, None);
+    }
+
+    #[test]
+    fn parse_trims_model_base_word_before_validation() {
+        let mut result = valid_result();
+        result.translations[0].sense_kind = Some("inflection".to_string());
+        result.translations[0].base_word = Some(" see ".to_string());
+        let raw_json = serde_json::to_string(&result).expect("result serializes");
+
+        let result =
+            parse_lexi_result_v1(&raw_json).expect("padded model baseWord should validate");
+
+        assert_eq!(result.translations[0].base_word.as_deref(), Some("see"));
+    }
+
+    #[test]
+    fn parse_repairs_quantified_inflection_without_base_word() {
+        let mut result = valid_result();
+        result.headword = "quantified".to_string();
+        result.translations[0].text = "定量化された".to_string();
+        result.translations[0].note = Some("verb".to_string());
+        result.translations[0].sense_kind = Some("inflection".to_string());
+        result.translations[0].base_word = None;
+        let raw_json = serde_json::to_string(&result).expect("result serializes");
+
+        let result =
+            parse_lexi_result_v1(&raw_json).expect("quantified inflection output should parse");
+
+        assert_eq!(result.translations[0].note.as_deref(), Some("動詞"));
+        assert_eq!(
+            result.translations[0].sense_kind.as_deref(),
+            Some("inflection")
+        );
+        assert_eq!(
+            result.translations[0].base_word.as_deref(),
+            Some("quantify")
+        );
     }
 
     #[test]

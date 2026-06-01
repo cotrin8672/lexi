@@ -594,7 +594,7 @@ impl TryFrom<TransformCaptureInput> for TransformCaptureMetadata {
             _ => {
                 return Err(AppError::invalid_model_output(
                     "retry capture metadata had an unknown capture method",
-                ))
+                ));
             }
         };
 
@@ -709,8 +709,8 @@ Hard requirements:
 - Do not include markdown, prose outside JSON, comments, or code fences.
 - Use resultLanguage "{result_language}" for all explanations and Japanese meaning fields.
 - Keep the result compact enough for a small desktop popup.
-- If the selection is a single inflected word with no independent dictionary meaning, set headword to its dictionary/base form, not the selected surface form. Examples: went -> go, ran -> run, playing -> play, studied -> study.
-- If the selected form is also a standalone dictionary word (for example saw as a tool, left as a direction), keep that form as headword and list both dictionary senses and inflection senses in translations.
+- If the selection is a single inflected word with no independent dictionary meaning, set headword to its dictionary/base form, not the selected surface form. Examples: went -> go, ran -> run, playing -> play, studied -> study, quantified -> quantify.
+- If the selected form is also a standalone dictionary word (for example saw as a tool, left as a direction), keep that form as headword and return dictionary senses for that headword. Mention ambiguity in warnings when useful.
 - If the selection is a sentence, choose the central word or phrase as headword and normalize that headword to its dictionary/base form when possible.
 - Return inflections only for irregular noun plural forms or irregular verb past/past participle forms. Use an empty inflections array for regular forms, adjectives, adverbs, phrases without a clear headword, or uncertain data.
 - If reliable synonyms are unavailable, use an empty array instead of guessing.
@@ -734,9 +734,7 @@ Field contract:
   - If candidates differ only in wording, kanji/kana style, formality, specificity, or explanation length, keep the broadest common dictionary equivalent and omit the rest.
   - Do not output sentence-like glosses, usage explanations, source-text summaries, or "X after Y" definitions. Put usage feel in nuance instead.
   - note must be null or exactly one part-of-speech label from this list: 名詞, 動詞, 形容詞, 副詞, 前置詞, 接続詞, 代名詞, 助動詞, 冠詞, 間投詞, 句, 成句, 接頭辞, 接尾辞. Do not use semantic domains such as 数学, 数, 比, 専門, or technical field labels in note.
-  - senseKind is null or exactly "dictionary" or "inflection". Omit senseKind for normal dictionary senses.
-  - baseWord is required only when senseKind is "inflection". It must name the base lemma, for example see for saw.
-  - When headword is a standalone word that is also an inflection of another lemma, include one dictionary sense and one inflection sense with senseKind "inflection" and baseWord set to the base lemma.
+  - Do not include senseKind or baseWord in translation items. Translation items are dictionary senses only; the headword must already be normalized to the base form when the selection is an inflected word.
   - example is required for every translation item and must demonstrate that specific sense.
     - example.sentence: a simple English sentence, max 96 characters. Prefer common daily contexts and do not quote sensitive selected text unless necessary.
     - example.japanese: natural Japanese translation of example.sentence, max 96 characters.
@@ -947,17 +945,7 @@ fn lexi_result_schema() -> Value {
             "resultLanguage": { "type": "string" },
             "headword": { "type": "string" },
             "inflections": { "type": "array", "minItems": 0, "maxItems": 3, "items": { "$ref": "#/$defs/inflection" } },
-            "translations": {
-                "type": "array",
-                "minItems": 1,
-                "maxItems": 3,
-                "items": {
-                    "anyOf": [
-                        { "$ref": "#/$defs/dictionaryTranslation" },
-                        { "$ref": "#/$defs/inflectionTranslation" }
-                    ]
-                }
-            },
+            "translations": { "type": "array", "minItems": 1, "maxItems": 3, "items": { "$ref": "#/$defs/translation" } },
             "nuance": { "type": "string" },
             "synonyms": { "type": "array", "minItems": 0, "maxItems": 4, "items": { "$ref": "#/$defs/relatedWord" } },
             "idioms": { "type": "array", "minItems": 0, "maxItems": 3, "items": { "$ref": "#/$defs/idiom" } },
@@ -973,37 +961,14 @@ fn lexi_result_schema() -> Value {
                     "japanese": { "type": "string" }
                 }
             },
-            "dictionaryTranslation": {
+            "translation": {
                 "type": "object",
                 "additionalProperties": false,
-                "required": ["text", "note", "example", "senseKind", "baseWord"],
+                "required": ["text", "note", "example"],
                 "properties": {
                     "text": { "type": "string" },
                     "note": translation_note_json_schema(),
-                    "example": { "$ref": "#/$defs/exampleSentence" },
-                    "senseKind": {
-                        "type": ["string", "null"],
-                        "enum": ["dictionary", null]
-                    },
-                    "baseWord": {
-                        "type": "null",
-                        "enum": [null]
-                    }
-                }
-            },
-            "inflectionTranslation": {
-                "type": "object",
-                "additionalProperties": false,
-                "required": ["text", "note", "example", "senseKind", "baseWord"],
-                "properties": {
-                    "text": { "type": "string" },
-                    "note": translation_note_json_schema(),
-                    "example": { "$ref": "#/$defs/exampleSentence" },
-                    "senseKind": {
-                        "type": "string",
-                        "enum": ["inflection"]
-                    },
-                    "baseWord": { "type": "string", "minLength": 1 }
+                    "example": { "$ref": "#/$defs/exampleSentence" }
                 }
             },
             "relatedWord": {
@@ -1512,13 +1477,7 @@ fn gemini_lexi_result_schema() -> Value {
                             "nullable": true,
                             "enum": TRANSLATION_NOTE_VALUES
                         },
-                        "example": gemini_example_sentence_schema(),
-                        "senseKind": {
-                            "type": "STRING",
-                            "nullable": true,
-                            "enum": ["dictionary", "inflection"]
-                        },
-                        "baseWord": { "type": "STRING", "nullable": true }
+                        "example": gemini_example_sentence_schema()
                     }
                 }
             },
@@ -1907,39 +1866,26 @@ mod tests {
             "plural"
         );
         assert_eq!(
-            schema["$defs"]["dictionaryTranslation"]["required"][2],
-            "example"
+            schema["properties"]["translations"]["items"]["$ref"],
+            "#/$defs/translation"
         );
+        assert_eq!(schema["$defs"]["translation"]["required"][2], "example");
         assert_eq!(
-            schema["$defs"]["dictionaryTranslation"]["properties"]["note"]["enum"][0],
+            schema["$defs"]["translation"]["properties"]["note"]["enum"][0],
             "名詞"
         );
-        assert!(
-            schema["$defs"]["dictionaryTranslation"]["properties"]["note"]["enum"]
-                .as_array()
-                .expect("note enum")
-                .contains(&serde_json::Value::Null)
-        );
-        assert_eq!(
-            schema["properties"]["translations"]["items"]["anyOf"][0]["$ref"],
-            "#/$defs/dictionaryTranslation"
-        );
-        assert_eq!(
-            schema["$defs"]["dictionaryTranslation"]["properties"]["baseWord"]["enum"][0],
-            serde_json::Value::Null
-        );
-        assert_eq!(
-            schema["$defs"]["inflectionTranslation"]["properties"]["senseKind"]["enum"][0],
-            "inflection"
-        );
-        assert_eq!(
-            schema["$defs"]["inflectionTranslation"]["properties"]["baseWord"]["type"],
-            "string"
-        );
-        assert_eq!(
-            schema["$defs"]["inflectionTranslation"]["properties"]["baseWord"]["minLength"],
-            1
-        );
+        assert!(schema["$defs"]["translation"]["properties"]["note"]["enum"]
+            .as_array()
+            .expect("note enum")
+            .contains(&serde_json::Value::Null));
+        assert!(!schema["$defs"]["translation"]["properties"]
+            .as_object()
+            .expect("translation properties")
+            .contains_key("baseWord"));
+        assert!(!schema["$defs"]["translation"]["properties"]
+            .as_object()
+            .expect("translation properties")
+            .contains_key("senseKind"));
         assert_eq!(schema["properties"]["synonyms"]["minItems"], 0);
         assert_eq!(schema["properties"]["synonyms"]["maxItems"], 4);
         assert_eq!(schema["properties"]["idioms"]["minItems"], 0);
@@ -1975,6 +1921,14 @@ mod tests {
             .as_array()
             .expect("translation required")
             .contains(&serde_json::Value::String("baseWord".to_string())));
+        assert!(!schema["properties"]["translations"]["items"]["properties"]
+            .as_object()
+            .expect("translation properties")
+            .contains_key("baseWord"));
+        assert!(!schema["properties"]["translations"]["items"]["properties"]
+            .as_object()
+            .expect("translation properties")
+            .contains_key("senseKind"));
         assert_eq!(schema["properties"]["synonyms"]["minItems"], 0);
         assert_eq!(schema["properties"]["synonyms"]["maxItems"], 4);
         assert_eq!(schema["properties"]["idioms"]["minItems"], 0);
@@ -1999,6 +1953,7 @@ mod tests {
 
         assert!(prompt.contains("single inflected word"));
         assert!(prompt.contains("went -> go"));
+        assert!(prompt.contains("quantified -> quantify"));
         assert!(prompt.contains("dictionary/base form"));
         assert!(prompt.contains("inflections: 0 to 3"));
         assert!(prompt.contains("Regular forms must be omitted"));
@@ -2022,6 +1977,7 @@ mod tests {
         assert!(prompt.contains("近づく"));
         assert!(prompt.contains("接近する"));
         assert!(prompt.contains("Merge or delete overlapping Japanese meanings"));
+        assert!(prompt.contains("Do not include senseKind or baseWord"));
         assert!(prompt.contains("example is required for every translation item"));
         assert!(prompt.contains("idioms: 0 to 3"));
         assert!(prompt.contains("Do not pad idioms"));
