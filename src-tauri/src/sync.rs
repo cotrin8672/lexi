@@ -10,11 +10,13 @@ use std::{
         atomic::{AtomicBool, Ordering},
         Mutex,
     },
-    time::{SystemTime, UNIX_EPOCH},
+    time::{Duration, SystemTime, UNIX_EPOCH},
 };
 use tauri::{AppHandle, Emitter, Manager};
 
+const PUSH_BATCH_LIMIT: usize = 20;
 const PULL_BATCH_LIMIT: i64 = 100;
+const PERIODIC_SYNC_INTERVAL: Duration = Duration::from_secs(60);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Default)]
 #[serde(rename_all = "camelCase")]
@@ -78,6 +80,7 @@ struct PullResponse {
 
 pub fn setup(app: &AppHandle) {
     schedule_sync(app.clone());
+    start_periodic_sync(app.clone());
 }
 
 pub fn schedule_sync(app: AppHandle) {
@@ -94,6 +97,13 @@ pub fn schedule_sync(app: AppHandle) {
             });
             let _ = app.emit("lexi:sync-status", build_status(&app));
         }
+    });
+}
+
+fn start_periodic_sync(app: AppHandle) {
+    std::thread::spawn(move || loop {
+        std::thread::sleep(PERIODIC_SYNC_INTERVAL);
+        schedule_sync(app.clone());
     });
 }
 
@@ -249,26 +259,36 @@ async fn push_pending_mutations(
     supabase_anon_key: &str,
     access_token: &str,
 ) -> Result<(), AppError> {
-    let pending = vocabulary::list_pending_mutations(app, 20)?;
-    for mutation in pending {
-        match push_mutation(supabase_url, supabase_anon_key, access_token, &mutation).await {
-            Ok(ack) => {
-                vocabulary::acknowledge_mutation(app, &ack.operation_id, ack.server_revision)?;
-            }
-            Err(error) => {
-                if should_record_mutation_failure(&error) {
-                    vocabulary::fail_mutation(
-                        app,
-                        &mutation.operation_id,
-                        &error.diagnostic_message,
-                        error.retryable,
-                    )?;
+    loop {
+        let pending = vocabulary::list_pending_mutations(app, PUSH_BATCH_LIMIT)?;
+        if pending.is_empty() {
+            return Ok(());
+        }
+
+        let batch_len = pending.len();
+        for mutation in pending {
+            match push_mutation(supabase_url, supabase_anon_key, access_token, &mutation).await {
+                Ok(ack) => {
+                    vocabulary::acknowledge_mutation(app, &ack.operation_id, ack.server_revision)?;
                 }
-                return Err(error);
+                Err(error) => {
+                    if should_record_mutation_failure(&error) {
+                        vocabulary::fail_mutation(
+                            app,
+                            &mutation.operation_id,
+                            &error.diagnostic_message,
+                            error.retryable,
+                        )?;
+                    }
+                    return Err(error);
+                }
             }
         }
+
+        if batch_len < PUSH_BATCH_LIMIT {
+            return Ok(());
+        }
     }
-    Ok(())
 }
 
 async fn push_mutation(
@@ -1095,7 +1115,9 @@ mod tests {
 
         for table in user_tables {
             assert!(
-                schema.contains(&format!("alter table public.{table} enable row level security;")),
+                schema.contains(&format!(
+                    "alter table public.{table} enable row level security;"
+                )),
                 "{table} should enable RLS"
             );
             assert!(
@@ -1113,8 +1135,9 @@ mod tests {
 
     #[test]
     fn supabase_rpcs_are_security_invoker_and_admin_gated() {
-        let apply_and_pull =
-            include_str!("../../supabase/migrations/202605310005_apply_mutation_ensure_lexeme_forms.sql");
+        let apply_and_pull = include_str!(
+            "../../supabase/migrations/202605310005_apply_mutation_ensure_lexeme_forms.sql"
+        );
         let original_pull =
             include_str!("../../supabase/migrations/202605310002_vocabulary_sync_rpcs.sql");
         let lookup =

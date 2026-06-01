@@ -242,6 +242,14 @@ function syncStatusLabel(status: SyncStatus | null): string | null {
 function syncStatusIsError(status: SyncStatus | null): boolean {
   return status?.signedIn === true && status.lifecycle === "error";
 }
+
+function syncStatusCanRetry(status: SyncStatus | null): boolean {
+  return (
+    status?.signedIn === true &&
+    status.lifecycle !== "syncing" &&
+    (status.lifecycle === "error" || status.pendingMutations > 0)
+  );
+}
 const POPUP_WINDOW_SIZE = new LogicalSize(400, 700);
 const AUTH_WINDOW_SIZE = new LogicalSize(460, 560);
 const POPUP_MIN_SIZE = new LogicalSize(400, 360);
@@ -1408,7 +1416,7 @@ export function SettingsPanel(props: {
           </Show>
           <Show
             when={
-              syncStatusIsError(props.syncStatus ?? null) && props.onRetrySync
+              syncStatusCanRetry(props.syncStatus ?? null) && props.onRetrySync
             }
           >
             <button

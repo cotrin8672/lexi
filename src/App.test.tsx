@@ -1564,5 +1564,38 @@ describe("App stream flow", () => {
 
     root.remove();
   });
+
+  it("shows sync retry controls in settings when pending mutations remain", () => {
+    const root = document.createElement("div");
+    document.body.appendChild(root);
+    render(
+      () => (
+        <SettingsView
+          settings={defaultProviderSettings()}
+          syncAuthStatus={{
+            configured: true,
+            signedIn: true,
+            userId: "user-1",
+            userEmail: "lexi@example.com",
+            callbackUrl: "http://localhost:38271/auth/callback",
+          }}
+          syncStatus={defaultSyncStatus({
+            lifecycle: "synced",
+            pendingMutations: 22,
+          })}
+          themeMode="light"
+          backgroundOpacity={0.94}
+          onSave={async () => undefined}
+          onRetrySync={async () => undefined}
+        />
+      ),
+      root,
+    );
+
+    expect(root.textContent).toContain("同期待ち: 22件");
+    expect(root.textContent).toContain("同期を再試行");
+
+    root.remove();
+  });
 });
 

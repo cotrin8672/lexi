@@ -248,6 +248,8 @@ Future vocabulary persistence should separate dictionary data, user vocabulary s
 - Local SQLite is a device-local cache, read projection, EJDict cache, and durable mutation queue. It is not a separate source of truth for synchronized data.
 - Normal reads should prefer SQLite so popup lookup and saved-card display do not block on network availability.
 - User writes should update the local projection optimistically and enqueue a durable mutation in the same local transaction. The mutation is applied to Supabase asynchronously.
+- The desktop app should retry vocabulary sync without requiring manual action: after startup, after sign-in, after local vocabulary saves, and periodically while the app is running.
+- A manual retry control should be available in settings whenever a signed-in user has pending local mutations or an actionable sync error.
 - Supabase should acknowledge accepted mutations with a server revision. Devices pull changes by server revision, not by client wall-clock timestamps.
 - Server-side mutation application should own merge, deduplication, alias attachment, and revision assignment.
 - The first cloud-sync deployment is personal-use only. Supabase vocabulary and sync tables must still enable RLS, but the initial policies may allow only the configured owner Supabase Auth user id to perform all operations. This owner-only policy is a temporary simplification, not permission to expose tables without RLS.

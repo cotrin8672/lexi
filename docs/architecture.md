@@ -226,8 +226,9 @@ Phase 10 sync engine:
 - Rust module `sync` pushes pending `mutation_outbox` rows through Supabase RPC `apply_vocabulary_mutation`.
 - On first sync for a signed-in user, `vocabulary_bootstrap` copies canonical vocabulary tables from Supabase into SQLite.
 - Incremental pull uses Supabase RPC `pull_vocabulary_changes` keyed by monotonically increasing `server_revision`.
-- Background sync starts after app setup, successful Google sign-in, and local vocabulary saves.
-- The frontend listens for `lexi:sync-status` and shows compact sync notes only in settings or auth-adjacent surfaces.
+- Background sync starts after app setup, successful Google sign-in, local vocabulary saves, and a periodic one-minute timer. Concurrent requests collapse into one in-flight sync plus a follow-up cycle.
+- A sync cycle drains pending `mutation_outbox` rows in batches until no retryable pending rows remain or a push fails.
+- The frontend listens for `lexi:sync-status` and shows compact sync notes only in settings or auth-adjacent surfaces. The settings sync retry control is available both for actionable errors and for signed-in states with pending local mutations.
 - Sync payloads exclude raw selected text, prompts, provider raw responses, and credentials.
 
 Reads should use the local SQLite replica after bootstrap. On first sign-in or when the local replica is incomplete, the backend copies the user's `user_lexemes`, `lexeme_forms`, and active `card_snapshots` from Supabase into SQLite, then continues with incremental `vocabulary_changes` pull. Popup lookup does not call Supabase on every word request. If the local replica has no match, the client falls back to LLM. EJDict reference data is one-way source data: it can be bundled, downloaded, or mirrored into Supabase and then imported into SQLite, but user vocabulary writes must not mutate global dictionary rows.
