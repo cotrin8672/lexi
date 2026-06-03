@@ -1,14 +1,12 @@
 use tauri::{
     menu::{Menu, MenuItem},
     tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
-    App, AppHandle, Manager, PhysicalPosition, Position, WebviewUrl, WebviewWindow,
-    WebviewWindowBuilder,
+    App, AppHandle, Manager, WebviewUrl, WebviewWindow, WebviewWindowBuilder,
 };
 
 const SHOW_MENU_ID: &str = "show";
 const SETTINGS_MENU_ID: &str = "settings";
 const QUIT_MENU_ID: &str = "quit";
-const WINDOW_EDGE_MARGIN: i32 = 16;
 
 pub fn setup(app: &mut App) -> Result<(), Box<dyn std::error::Error>> {
     let show = MenuItem::with_id(app, SHOW_MENU_ID, "Show Lexi", true, None::<&str>)?;
@@ -48,7 +46,6 @@ pub fn setup(app: &mut App) -> Result<(), Box<dyn std::error::Error>> {
 
 pub fn show_main_window(app: &AppHandle) {
     if let Some(window) = app.get_webview_window("main") {
-        let _ = position_window_at_monitor_right_edge(&window);
         let _ = window.show();
         let _ = window.unminimize();
         let _ = window.set_focus();
@@ -82,20 +79,4 @@ fn build_settings_window(app: &AppHandle) -> tauri::Result<WebviewWindow> {
         .visible(true)
         .center()
         .build()
-}
-
-fn position_window_at_monitor_right_edge(window: &tauri::WebviewWindow) -> tauri::Result<()> {
-    let monitor = window.current_monitor()?.or(window.primary_monitor()?);
-    let Some(monitor) = monitor else {
-        return Ok(());
-    };
-
-    let work_area = monitor.work_area();
-    let window_size = window.outer_size()?;
-    let x = work_area.position.x + work_area.size.width as i32
-        - window_size.width as i32
-        - WINDOW_EDGE_MARGIN;
-    let y = work_area.position.y + WINDOW_EDGE_MARGIN;
-
-    window.set_position(Position::Physical(PhysicalPosition { x, y }))
 }

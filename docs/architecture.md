@@ -99,6 +99,7 @@ System tray behavior:
 - Left-clicking the tray icon shows and focuses the main popup.
 - The tray menu exposes `Show Lexi` and `Quit Lexi`. Window close requests hide the popup instead of exiting; the tray quit action exits the process.
 - The main window is configured with `skipTaskbar` so the tray remains the persistent desktop entry point.
+- Re-showing the main popup does not reposition it; because close requests hide the existing window, the user's last position is preserved for the current app session.
 
 Phase 3 frontend event:
 

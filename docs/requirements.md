@@ -36,7 +36,7 @@ Out of scope for the first release:
 - The app creates a system tray icon on startup and remains running when the popup window is hidden or closed.
 - Clicking the tray icon shows the popup. The tray menu provides explicit show and quit actions.
 - When the shortcut fires, the app attempts to read the current foreground selection.
-- If selected text is available, the app opens a small popup near the active context or at a deterministic fallback position.
+- If selected text is available, the app opens the popup at the user's previous position for the current app session, with only first launch using the configured default position.
 - The app classifies the selected text after backend capture succeeds. Single words and short phrase-like selections use the configured LLM word-study provider; sentence-like selections use DeepL text translation.
 - Once the provider request starts, the popup should show a normalized preview of the selected word/text in the headword slot while the structured response is still pending.
 - The app should consume provider responses as streams where supported and render completed partial fields before the final response is validated.
@@ -215,7 +215,7 @@ Each error should include a stable code, a short user message, and a diagnostic 
 - Global shortcut conflicts are common. Mitigation: make the shortcut configurable and expose registration failure clearly.
 - LLM output can drift from schema. Mitigation: validate strictly and version schemas.
 - Sensitive text can leak through logs. Mitigation: structured redaction and no raw payload logging.
-- Popup positioning can be inconsistent across monitors and DPI settings. Mitigation: use deterministic fallback placement and test high-DPI multi-monitor setups.
+- Popup positioning can be inconsistent across monitors and DPI settings. Mitigation: avoid repositioning an already-opened popup unless explicitly requested, and test high-DPI multi-monitor setups before adding placement rules.
 
 ## Milestones
 
@@ -268,7 +268,7 @@ Future vocabulary persistence should separate dictionary data, user vocabulary s
 - Which exact first workflow should ship: explain, translate, rewrite, or summarize?
 - Whether OpenAI should become the default if Gemini structured responses are unstable in daily use.
 - Whether non-Windows builds need equivalent OS keychain implementations in the first release.
-- Should the popup appear near cursor, near selected text when possible, or at a fixed screen edge?
+- Should the first-launch popup appear near cursor, near selected text when possible, or at a fixed default position?
 - Which applications are must-support targets for the first Windows release?
 - Whether cloud sync should be required for vocabulary persistence or remain an optional signed-in feature.
 
