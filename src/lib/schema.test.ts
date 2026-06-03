@@ -1,9 +1,11 @@
 import { describe, expect, it } from "vitest";
 import {
+  LEXI_JP_WORD_CANDIDATES_V1_SCHEMA_VERSION,
   LEXI_RESULT_V1_SCHEMA_VERSION,
   LEXI_TEXT_TRANSLATION_V1_SCHEMA_VERSION,
   TRANSLATION_NOTE_VALUES,
   validateLexiResultV1,
+  type JapaneseWordCandidatesResultV1,
   type LexiResultV1,
   type TextTranslationResultV1,
 } from "./schema";
@@ -159,6 +161,152 @@ describe("validateLexiResultV1 text-translation", () => {
     expect(validateLexiResultV1(result)).toEqual({
       ok: false,
       reason: "segments must be a translation segment array",
+    });
+  });
+});
+
+function mockJapaneseWordCandidatesResult(): JapaneseWordCandidatesResultV1 {
+  return {
+    schemaVersion: LEXI_JP_WORD_CANDIDATES_V1_SCHEMA_VERSION,
+    mode: "jp-word-candidates",
+    sourceLanguage: "ja",
+    resultLanguage: "en",
+    query: "採用",
+    candidates: [
+      {
+        term: "adopt",
+        partOfSpeech: "動詞",
+        japaneseNuance: "方針・方法・制度などを選んで使い始める",
+        usageNote: "案や制度を公式に取り入れる文脈で使う。",
+        example: {
+          sentence: "The team adopted a new policy.",
+          japanese: "チームは新しい方針を採用した。",
+        },
+        confidence: "high",
+      },
+      {
+        term: "hire",
+        partOfSpeech: "動詞",
+        japaneseNuance: "人を雇う",
+        usageNote: "人材を採用する文脈で使う。",
+        example: {
+          sentence: "They hired a new engineer.",
+          japanese: "新しいエンジニアを採用した。",
+        },
+        confidence: "medium",
+      },
+    ],
+    warnings: [],
+  };
+}
+
+describe("validateLexiResultV1 jp-word-candidates", () => {
+  it("accepts valid japanese word candidate results", () => {
+    expect(validateLexiResultV1(mockJapaneseWordCandidatesResult()).ok).toBe(true);
+  });
+
+  it("rejects unsupported schema versions", () => {
+    const result = mockJapaneseWordCandidatesResult();
+    result.schemaVersion =
+      "lexi.jp-word-candidates.v2" as typeof result.schemaVersion;
+
+    expect(validateLexiResultV1(result)).toEqual({
+      ok: false,
+      reason: "unsupported schemaVersion",
+    });
+  });
+
+  it("rejects empty query", () => {
+    const result = mockJapaneseWordCandidatesResult();
+    result.query = "   ";
+
+    expect(validateLexiResultV1(result)).toEqual({
+      ok: false,
+      reason: "required field 'query' is missing or empty",
+    });
+  });
+
+  it("rejects unsupported source and result languages", () => {
+    const sourceResult = mockJapaneseWordCandidatesResult();
+    sourceResult.sourceLanguage = "en";
+
+    expect(validateLexiResultV1(sourceResult)).toEqual({
+      ok: false,
+      reason: "unsupported sourceLanguage",
+    });
+
+    const resultLanguageResult = mockJapaneseWordCandidatesResult();
+    resultLanguageResult.resultLanguage = "ja";
+
+    expect(validateLexiResultV1(resultLanguageResult)).toEqual({
+      ok: false,
+      reason: "unsupported resultLanguage",
+    });
+  });
+
+  it("rejects overlong query", () => {
+    const result = mockJapaneseWordCandidatesResult();
+    result.query = "あ".repeat(33);
+
+    expect(validateLexiResultV1(result)).toEqual({
+      ok: false,
+      reason: "query exceeds maximum length",
+    });
+  });
+
+  it("rejects zero candidates", () => {
+    const result = mockJapaneseWordCandidatesResult();
+    result.candidates = [];
+
+    expect(validateLexiResultV1(result)).toEqual({
+      ok: false,
+      reason: "candidates must contain at least one item",
+    });
+  });
+
+  it("rejects more than eight candidates", () => {
+    const result = mockJapaneseWordCandidatesResult();
+    result.candidates = Array.from({ length: 9 }, (_, index) => ({
+      ...result.candidates[0],
+      term: `term${index}`,
+    }));
+
+    expect(validateLexiResultV1(result)).toEqual({
+      ok: false,
+      reason: "candidates exceeds maximum length",
+    });
+  });
+
+  it("rejects candidates without examples", () => {
+    const result = mockJapaneseWordCandidatesResult();
+    result.candidates[0].example = {
+      sentence: " ",
+      japanese: "訳文",
+    };
+
+    expect(validateLexiResultV1(result)).toEqual({
+      ok: false,
+      reason: "candidates must be a valid candidate array",
+    });
+  });
+
+  it("rejects invalid confidence values", () => {
+    const result = mockJapaneseWordCandidatesResult();
+    result.candidates[0].confidence = "very-high" as never;
+
+    expect(validateLexiResultV1(result)).toEqual({
+      ok: false,
+      reason: "candidates must be a valid candidate array",
+    });
+  });
+
+  it("rejects overlong candidate terms", () => {
+    const result = mockJapaneseWordCandidatesResult();
+    result.candidates[0].term = "a".repeat(49);
+
+    expect(validateLexiResultV1(result)).toEqual({
+      ok: false,
+      reason: "candidates must be a valid candidate array",
     });
   });
 });

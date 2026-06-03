@@ -1,6 +1,8 @@
 export const LEXI_RESULT_V1_SCHEMA_VERSION = "lexi.result.v1";
 export const LEXI_TEXT_TRANSLATION_V1_SCHEMA_VERSION =
   "lexi.text-translation.v1";
+export const LEXI_JP_WORD_CANDIDATES_V1_SCHEMA_VERSION =
+  "lexi.jp-word-candidates.v1";
 export const TRANSLATION_NOTE_VALUES = [
   "名詞",
   "動詞",
@@ -83,7 +85,36 @@ export interface TextTranslationResultV1 {
   warnings: string[];
 }
 
-export type LexiResult = LexiResultV1 | TextTranslationResultV1;
+export type CandidateConfidence = "high" | "medium" | "low";
+
+export interface CandidateExample {
+  sentence: string;
+  japanese: string;
+}
+
+export interface EnglishCandidate {
+  term: string;
+  partOfSpeech: string;
+  japaneseNuance: string;
+  usageNote: string;
+  example: CandidateExample;
+  confidence: CandidateConfidence;
+}
+
+export interface JapaneseWordCandidatesResultV1 {
+  schemaVersion: typeof LEXI_JP_WORD_CANDIDATES_V1_SCHEMA_VERSION;
+  mode: "jp-word-candidates";
+  sourceLanguage: string;
+  resultLanguage: string;
+  query: string;
+  candidates: EnglishCandidate[];
+  warnings: string[];
+}
+
+export type LexiResult =
+  | LexiResultV1
+  | TextTranslationResultV1
+  | JapaneseWordCandidatesResultV1;
 
 export type LexiResultValidation =
   | { ok: true; result: LexiResult }
@@ -96,6 +127,10 @@ export function validateLexiResultV1(value: unknown): LexiResultValidation {
 
   if (value.schemaVersion === LEXI_TEXT_TRANSLATION_V1_SCHEMA_VERSION) {
     return validateTextTranslationResultV1(value);
+  }
+
+  if (value.schemaVersion === LEXI_JP_WORD_CANDIDATES_V1_SCHEMA_VERSION) {
+    return validateJapaneseWordCandidatesResultV1(value);
   }
 
   if (value.schemaVersion !== LEXI_RESULT_V1_SCHEMA_VERSION) {
@@ -212,6 +247,64 @@ function validateTextTranslationResultV1(
   }
 
   return { ok: true, result: value as unknown as TextTranslationResultV1 };
+}
+
+function validateJapaneseWordCandidatesResultV1(
+  value: Record<string, unknown>,
+): LexiResultValidation {
+  const required = [
+    "mode",
+    "sourceLanguage",
+    "resultLanguage",
+    "query",
+  ] as const;
+
+  for (const field of required) {
+    if (!isNonEmptyString(value[field])) {
+      return { ok: false, reason: `required field '${field}' is missing or empty` };
+    }
+  }
+
+  if (value.mode !== "jp-word-candidates") {
+    return { ok: false, reason: "unsupported mode" };
+  }
+
+  if (value.sourceLanguage !== "ja") {
+    return { ok: false, reason: "unsupported sourceLanguage" };
+  }
+
+  if (value.resultLanguage !== "en") {
+    return { ok: false, reason: "unsupported resultLanguage" };
+  }
+
+  if (charCount(String(value.query)) > 32) {
+    return { ok: false, reason: "query exceeds maximum length" };
+  }
+
+  if (!isEnglishCandidateArray(value.candidates)) {
+    return { ok: false, reason: "candidates must be a valid candidate array" };
+  }
+
+  if (value.candidates.length === 0) {
+    return { ok: false, reason: "candidates must contain at least one item" };
+  }
+
+  if (value.candidates.length > 8) {
+    return { ok: false, reason: "candidates exceeds maximum length" };
+  }
+
+  if (!isStringArray(value.warnings)) {
+    return { ok: false, reason: "warnings must be an array of strings" };
+  }
+
+  if (!areWarningsValid(value.warnings)) {
+    return { ok: false, reason: "warnings must be an array of strings" };
+  }
+
+  return {
+    ok: true,
+    result: value as unknown as JapaneseWordCandidatesResultV1,
+  };
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -363,5 +456,34 @@ function isTranslationSegmentArray(value: unknown): value is TranslationSegment[
         charCount(item.source) <= 1000 &&
         charCount(item.translation) <= 1000,
     )
+  );
+}
+
+function isCandidateConfidence(value: unknown): value is CandidateConfidence {
+  return value === "high" || value === "medium" || value === "low";
+}
+
+function isEnglishCandidateArray(value: unknown): value is EnglishCandidate[] {
+  return (
+    Array.isArray(value) &&
+    value.every((item) => {
+      if (
+        !isRecord(item) ||
+        !isNonEmptyString(item.term) ||
+        charCount(item.term) > 48 ||
+        !isNonEmptyString(item.partOfSpeech) ||
+        !isTranslationNote(item.partOfSpeech) ||
+        !isNonEmptyString(item.japaneseNuance) ||
+        charCount(item.japaneseNuance) > 80 ||
+        !isNonEmptyString(item.usageNote) ||
+        charCount(item.usageNote) > 120 ||
+        !isExampleSentence(item.example) ||
+        !isCandidateConfidence(item.confidence)
+      ) {
+        return false;
+      }
+
+      return true;
+    })
   );
 }
