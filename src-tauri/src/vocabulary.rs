@@ -1,6 +1,9 @@
 use crate::{
     errors::AppError,
-    schema::{Inflection, LexiResultV1},
+    schema::{
+        Inflection, JapaneseWordCandidatesResultV1, LexiResultV1,
+        LEXI_JP_WORD_CANDIDATES_V1_SCHEMA_VERSION, LEXI_RESULT_V1_SCHEMA_VERSION,
+    },
     settings::ProviderKind,
 };
 use rusqlite::{params, Connection, OptionalExtension};
@@ -77,6 +80,38 @@ pub fn save_word_study_result(
 ) -> Result<(), AppError> {
     let mut connection = open_store(app)?;
     save_word_study_result_to_connection(&mut connection, result, provider, model, selected_text)
+}
+
+/// Resolve a Japanese word-candidates card from the local SQLite replica.
+pub async fn load_japanese_word_candidates(
+    app: &AppHandle,
+    selected_text: &str,
+    result_language: &str,
+) -> Result<Option<JapaneseWordCandidatesResultV1>, AppError> {
+    let lookup_key = normalize_lookup_key(selected_text);
+    if lookup_key.is_empty() {
+        return Ok(None);
+    }
+
+    let connection = open_store(app)?;
+    load_cached_japanese_word_candidates_from_connection(&connection, &lookup_key, result_language)
+}
+
+pub fn save_japanese_word_candidates_result(
+    app: &AppHandle,
+    result: &JapaneseWordCandidatesResultV1,
+    provider: ProviderKind,
+    model: &str,
+    selected_text: &str,
+) -> Result<(), AppError> {
+    let mut connection = open_store(app)?;
+    save_japanese_word_candidates_result_to_connection(
+        &mut connection,
+        result,
+        provider,
+        model,
+        selected_text,
+    )
 }
 
 pub fn open_store(app: &AppHandle) -> Result<Connection, AppError> {
@@ -375,6 +410,7 @@ fn resolve_unique_lexeme_for_form_key(
 fn query_lexeme_form_matches(
     connection: &Connection,
     lookup_key: &str,
+    lexeme_language: &str,
     result_language: Option<&str>,
     user_id: &str,
 ) -> Result<Vec<LexemeFormMatch>, AppError> {
@@ -387,7 +423,7 @@ fn query_lexeme_form_matches(
                 join user_lexemes ul on ul.id = lf.lexeme_id
                 join card_snapshots cs on cs.lexeme_id = lf.lexeme_id
                 where lf.user_id = ?1
-                  and lf.language = 'en'
+                  and lf.language = ?4
                   and lf.form_key = ?2
                   and cs.result_language = ?3
                   and cs.active = 1
@@ -407,7 +443,7 @@ fn query_lexeme_form_matches(
                 from user_lexemes ul
                 join card_snapshots cs on cs.lexeme_id = ul.id
                 where ul.user_id = ?1
-                  and ul.language = 'en'
+                  and ul.language = ?4
                   and ul.canonical_key = ?2
                   and cs.result_language = ?3
                   and cs.active = 1
@@ -430,14 +466,17 @@ fn query_lexeme_form_matches(
             })?;
 
         let rows = statement
-            .query_map(params![user_id, lookup_key, result_language], |row| {
-                Ok(LexemeFormMatch {
-                    lexeme_id: row.get(0)?,
-                    relation: row.get(1)?,
-                    form_text: row.get(2)?,
-                    content_json: Some(row.get(3)?),
-                })
-            })
+            .query_map(
+                params![user_id, lookup_key, result_language, lexeme_language],
+                |row| {
+                    Ok(LexemeFormMatch {
+                        lexeme_id: row.get(0)?,
+                        relation: row.get(1)?,
+                        form_text: row.get(2)?,
+                        content_json: Some(row.get(3)?),
+                    })
+                },
+            )
             .map_err(|error| {
                 AppError::vocabulary_store_failed(
                     format!("vocabulary form match query failed: {error}"),
@@ -460,7 +499,7 @@ fn query_lexeme_form_matches(
             from lexeme_forms lf
             join user_lexemes ul on ul.id = lf.lexeme_id
             where lf.user_id = ?1
-              and lf.language = 'en'
+              and lf.language = ?3
               and lf.form_key = ?2
               and ul.deleted_at is null
 
@@ -469,7 +508,7 @@ fn query_lexeme_form_matches(
             select ul.id, 'canonical', ul.canonical_text
             from user_lexemes ul
             where ul.user_id = ?1
-              and ul.language = 'en'
+              and ul.language = ?3
               and ul.canonical_key = ?2
               and ul.deleted_at is null
             "#,
@@ -482,7 +521,7 @@ fn query_lexeme_form_matches(
         })?;
 
     let rows = statement
-        .query_map(params![user_id, lookup_key], |row| {
+        .query_map(params![user_id, lookup_key, lexeme_language], |row| {
             Ok(LexemeFormMatch {
                 lexeme_id: row.get(0)?,
                 relation: row.get(1)?,
@@ -517,7 +556,7 @@ fn resolve_lexeme_for_save(
         return Ok(None);
     }
 
-    let matches = query_lexeme_form_matches(connection, &lookup_key, None, user_id)?;
+    let matches = query_lexeme_form_matches(connection, &lookup_key, "en", None, user_id)?;
     let Some(lexeme_id) = resolve_unique_lexeme_for_form_key(&lookup_key, &matches) else {
         return Ok(None);
     };
@@ -577,8 +616,13 @@ fn load_cached_word_study_from_connection(
     result_language: &str,
 ) -> Result<Option<LexiResultV1>, AppError> {
     let user_id = effective_user_id();
-    let matches =
-        query_lexeme_form_matches(connection, lookup_key, Some(result_language), &user_id)?;
+    let matches = query_lexeme_form_matches(
+        connection,
+        lookup_key,
+        "en",
+        Some(result_language),
+        &user_id,
+    )?;
     word_study_from_form_matches(lookup_key, &matches)
 }
 
@@ -604,6 +648,48 @@ fn word_study_from_form_matches(
     let parsed = serde_json::from_str::<LexiResultV1>(content_json).map_err(|error| {
         AppError::invalid_model_output(format!("cached card parse failed: {error}"))
     })?;
+    Ok(Some(parsed.validate()?))
+}
+
+fn load_cached_japanese_word_candidates_from_connection(
+    connection: &Connection,
+    lookup_key: &str,
+    result_language: &str,
+) -> Result<Option<JapaneseWordCandidatesResultV1>, AppError> {
+    let user_id = effective_user_id();
+    let matches = query_lexeme_form_matches(
+        connection,
+        lookup_key,
+        "ja",
+        Some(result_language),
+        &user_id,
+    )?;
+    japanese_word_candidates_from_form_matches(lookup_key, &matches)
+}
+
+fn japanese_word_candidates_from_form_matches(
+    lookup_key: &str,
+    matches: &[LexemeFormMatch],
+) -> Result<Option<JapaneseWordCandidatesResultV1>, AppError> {
+    let Some(lexeme_id) = resolve_unique_lexeme_for_form_key(lookup_key, matches) else {
+        return Ok(None);
+    };
+
+    let content_json = matches
+        .iter()
+        .find(|form_match| form_match.lexeme_id == lexeme_id)
+        .and_then(|form_match| form_match.content_json.as_ref())
+        .ok_or_else(|| {
+            AppError::vocabulary_store_failed(
+                "resolved vocabulary match missing card content",
+                false,
+            )
+        })?;
+
+    let parsed =
+        serde_json::from_str::<JapaneseWordCandidatesResultV1>(content_json).map_err(|error| {
+            AppError::invalid_model_output(format!("cached ja2en card parse failed: {error}"))
+        })?;
     Ok(Some(parsed.validate()?))
 }
 
@@ -783,6 +869,188 @@ fn save_word_study_result_to_connection(
             true,
         )
     })
+}
+
+fn save_japanese_word_candidates_result_to_connection(
+    connection: &mut Connection,
+    result: &JapaneseWordCandidatesResultV1,
+    provider: ProviderKind,
+    model: &str,
+    selected_text: &str,
+) -> Result<(), AppError> {
+    let user_id = effective_user_id();
+    let canonical_key = normalize_lookup_key(&result.query);
+    if canonical_key.is_empty() {
+        return Ok(());
+    }
+    let canonical_text = result.query.clone();
+
+    let content_json = serde_json::to_string(result).map_err(|error| {
+        AppError::vocabulary_store_failed(
+            format!("vocabulary card serialize failed: {error}"),
+            false,
+        )
+    })?;
+    let provider_json = serde_json::to_string(&provider).map_err(|error| {
+        AppError::vocabulary_store_failed(format!("provider serialize failed: {error}"), false)
+    })?;
+    let operation_id = new_operation_id();
+
+    let tx = connection.transaction().map_err(|error| {
+        AppError::vocabulary_store_failed(format!("vocabulary transaction failed: {error}"), true)
+    })?;
+
+    tx.execute(
+        r#"
+        insert or ignore into user_lexemes (
+          user_id, language, canonical_text, canonical_key, part_of_speech
+        ) values (?1, 'ja', ?2, ?3, null)
+        "#,
+        params![user_id, canonical_text, canonical_key],
+    )
+    .map_err(|error| {
+        AppError::vocabulary_store_failed(format!("vocabulary lexeme insert failed: {error}"), true)
+    })?;
+
+    tx.execute(
+        r#"
+        update user_lexemes
+        set canonical_text = ?3,
+            updated_at = datetime('now'),
+            deleted_at = null
+        where user_id = ?1 and language = 'ja' and canonical_key = ?2
+        "#,
+        params![user_id, canonical_key, canonical_text],
+    )
+    .map_err(|error| {
+        AppError::vocabulary_store_failed(format!("vocabulary lexeme update failed: {error}"), true)
+    })?;
+
+    let lexeme_id = tx
+        .query_row(
+            "select id from user_lexemes where user_id = ?1 and language = 'ja' and canonical_key = ?2",
+            params![user_id, canonical_key],
+            |row| row.get::<_, String>(0),
+        )
+        .map_err(|error| {
+            AppError::vocabulary_store_failed(format!("vocabulary lexeme lookup failed: {error}"), true)
+        })?;
+
+    ensure_japanese_lexeme_forms(
+        &tx,
+        &user_id,
+        &lexeme_id,
+        &canonical_text,
+        &canonical_key,
+        selected_text,
+    )?;
+
+    tx.execute(
+        "update card_snapshots set active = 0 where user_id = ?1 and lexeme_id = ?2 and result_language = ?3",
+        params![user_id, lexeme_id, result.result_language],
+    )
+    .map_err(|error| {
+        AppError::vocabulary_store_failed(format!("vocabulary snapshot deactivate failed: {error}"), true)
+    })?;
+
+    tx.execute(
+        r#"
+        insert into card_snapshots (
+          user_id, lexeme_id, schema_version, provider, model, result_language, content_json, active
+        ) values (?1, ?2, ?3, ?4, ?5, ?6, ?7, 1)
+        "#,
+        params![
+            user_id,
+            lexeme_id,
+            result.schema_version,
+            provider_json.trim_matches('"'),
+            model,
+            result.result_language,
+            content_json
+        ],
+    )
+    .map_err(|error| {
+        AppError::vocabulary_store_failed(
+            format!("vocabulary snapshot insert failed: {error}"),
+            true,
+        )
+    })?;
+
+    let forms: Vec<MutationForm> = collect_forms_for_lexeme(&tx, &user_id, &lexeme_id)?
+        .into_iter()
+        .filter(|form| form.source != "capture")
+        .collect();
+    let mutation_payload = serde_json::json!({
+        "schemaVersion": result.schema_version,
+        "language": "ja",
+        "resultLanguage": result.result_language,
+        "canonicalText": canonical_text,
+        "canonicalKey": canonical_key,
+        "provider": provider,
+        "model": model,
+        "content": &result,
+        "forms": forms,
+    });
+    let mutation_payload_json = serde_json::to_string(&mutation_payload).map_err(|error| {
+        AppError::vocabulary_store_failed(
+            format!("vocabulary mutation serialize failed: {error}"),
+            false,
+        )
+    })?;
+
+    tx.execute(
+        r#"
+        insert or ignore into mutation_outbox (
+          user_id, operation_id, mutation_type, payload_json
+        ) values (?1, ?2, 'save_card_snapshot', ?3)
+        "#,
+        params![user_id, operation_id, mutation_payload_json],
+    )
+    .map_err(|error| {
+        AppError::vocabulary_store_failed(
+            format!("vocabulary mutation enqueue failed: {error}"),
+            true,
+        )
+    })?;
+
+    tx.commit().map_err(|error| {
+        AppError::vocabulary_store_failed(
+            format!("vocabulary transaction commit failed: {error}"),
+            true,
+        )
+    })
+}
+
+fn ensure_japanese_lexeme_forms(
+    connection: &Connection,
+    user_id: &str,
+    lexeme_id: &str,
+    canonical_text: &str,
+    canonical_key: &str,
+    observed_text: &str,
+) -> Result<(), AppError> {
+    insert_form(
+        connection,
+        user_id,
+        lexeme_id,
+        canonical_text,
+        "canonical",
+        "provider",
+    )?;
+
+    let observed_key = normalize_lookup_key(observed_text);
+    if !observed_key.is_empty() && observed_key != canonical_key {
+        insert_form(
+            connection,
+            user_id,
+            lexeme_id,
+            observed_text,
+            "observed",
+            "capture",
+        )?;
+    }
+
+    Ok(())
 }
 
 fn insert_inflection_form(
@@ -980,15 +1248,26 @@ pub(crate) fn repair_lexeme_forms_for_active_cards(
                     true,
                 )
             })?;
-        ensure_lexeme_forms_from_content_json(
-            connection,
-            &user_id,
-            &lexeme_id,
-            &canonical_text,
-            &canonical_key,
-            &content_json,
-            EnsureLexemeFormsOptions::default(),
-        )?;
+        if content_json.contains(LEXI_JP_WORD_CANDIDATES_V1_SCHEMA_VERSION) {
+            ensure_japanese_lexeme_forms(
+                connection,
+                &user_id,
+                &lexeme_id,
+                &canonical_text,
+                &canonical_key,
+                &canonical_text,
+            )?;
+        } else {
+            ensure_lexeme_forms_from_content_json(
+                connection,
+                &user_id,
+                &lexeme_id,
+                &canonical_text,
+                &canonical_key,
+                &content_json,
+                EnsureLexemeFormsOptions::default(),
+            )?;
+        }
     }
 
     Ok(())
@@ -1007,14 +1286,35 @@ fn insert_form(
         return Ok(());
     }
 
+    let lexeme_language = connection
+        .query_row(
+            "select language from user_lexemes where id = ?1",
+            params![lexeme_id],
+            |row| row.get::<_, String>(0),
+        )
+        .map_err(|error| {
+            AppError::vocabulary_store_failed(
+                format!("vocabulary lexeme language lookup failed: {error}"),
+                true,
+            )
+        })?;
+
     connection
         .execute(
             r#"
             insert or ignore into lexeme_forms (
               user_id, lexeme_id, language, form_text, form_key, relation, source, confidence
-            ) values (?1, ?2, 'en', ?3, ?4, ?5, ?6, 1.0)
+            ) values (?1, ?2, ?3, ?4, ?5, ?6, ?7, 1.0)
             "#,
-            params![user_id, lexeme_id, form_text, form_key, relation, source],
+            params![
+                user_id,
+                lexeme_id,
+                lexeme_language,
+                form_text,
+                form_key,
+                relation,
+                source
+            ],
         )
         .map_err(|error| {
             AppError::vocabulary_store_failed(
@@ -1391,12 +1691,16 @@ pub(crate) fn apply_pulled_card_snapshot_to_connection(
     let content_json = serde_json::to_string(content).map_err(|error| {
         AppError::vocabulary_store_failed(format!("pull content serialize failed: {error}"), false)
     })?;
-    let part_of_speech = content
-        .get("translations")
-        .and_then(|value| value.as_array())
-        .and_then(|items| items.first())
-        .and_then(|item| item.get("note"))
-        .and_then(|value| value.as_str());
+    let part_of_speech = if schema_version == LEXI_RESULT_V1_SCHEMA_VERSION {
+        content
+            .get("translations")
+            .and_then(|value| value.as_array())
+            .and_then(|items| items.first())
+            .and_then(|item| item.get("note"))
+            .and_then(|value| value.as_str())
+    } else {
+        None
+    };
 
     let tx = connection.transaction().map_err(|error| {
         AppError::vocabulary_store_failed(format!("pull apply transaction failed: {error}"), true)
@@ -1500,15 +1804,17 @@ pub(crate) fn apply_pulled_card_snapshot_to_connection(
         AppError::vocabulary_store_failed(format!("pull snapshot insert failed: {error}"), true)
     })?;
 
-    ensure_lexeme_forms_from_content_json(
-        &tx,
-        user_id,
-        &lexeme_id,
-        canonical_text,
-        canonical_key,
-        &content_json,
-        EnsureLexemeFormsOptions::default(),
-    )?;
+    if schema_version == LEXI_RESULT_V1_SCHEMA_VERSION {
+        ensure_lexeme_forms_from_content_json(
+            &tx,
+            user_id,
+            &lexeme_id,
+            canonical_text,
+            canonical_key,
+            &content_json,
+            EnsureLexemeFormsOptions::default(),
+        )?;
+    }
 
     tx.commit().map_err(|error| {
         AppError::vocabulary_store_failed(format!("pull apply commit failed: {error}"), true)
@@ -1573,14 +1879,17 @@ mod tests {
     use super::{
         apply_pulled_card_snapshot_to_connection, effective_user_id, ensure_lexeme_forms,
         ensure_lexeme_forms_from_content_json, initialize_schema,
+        load_cached_japanese_word_candidates_from_connection,
         load_cached_word_study_from_connection, local_mutation_already_acknowledged,
         normalize_lookup_key, pulled_change_already_applied, repair_lexeme_forms_for_active_cards,
-        save_word_study_result_to_connection, sync_scope_key, EnsureLexemeFormsOptions,
-        PulledChange,
+        save_japanese_word_candidates_result_to_connection, save_word_study_result_to_connection,
+        sync_scope_key, EnsureLexemeFormsOptions, PulledChange,
     };
     use crate::{
         schema::{
-            ExampleSentence, Inflection, LexiResultV1, Translation, LEXI_RESULT_V1_SCHEMA_VERSION,
+            CandidateConfidence, CandidateExample, EnglishCandidate, ExampleSentence, Inflection,
+            JapaneseWordCandidatesResultV1, LexiResultV1, Translation,
+            LEXI_JP_WORD_CANDIDATES_V1_SCHEMA_VERSION, LEXI_RESULT_V1_SCHEMA_VERSION,
         },
         settings::ProviderKind,
     };
@@ -1641,6 +1950,43 @@ mod tests {
             selected_text,
         )
         .expect("save result");
+    }
+
+    fn japanese_word_candidates_result(query: &str) -> JapaneseWordCandidatesResultV1 {
+        JapaneseWordCandidatesResultV1 {
+            schema_version: LEXI_JP_WORD_CANDIDATES_V1_SCHEMA_VERSION.to_string(),
+            mode: "jp-word-candidates".to_string(),
+            source_language: "ja".to_string(),
+            result_language: "en".to_string(),
+            query: query.to_string(),
+            candidates: vec![EnglishCandidate {
+                term: "adopt".to_string(),
+                part_of_speech: "動詞".to_string(),
+                japanese_nuance: "取り入れる".to_string(),
+                usage_note: "制度を採用する文脈で使う。".to_string(),
+                example: CandidateExample {
+                    sentence: "The team adopted a new policy.".to_string(),
+                    japanese: "チームは新しい方針を採用した。".to_string(),
+                },
+                confidence: CandidateConfidence::High,
+            }],
+            warnings: vec![],
+        }
+    }
+
+    fn save_japanese(
+        connection: &mut Connection,
+        result: &JapaneseWordCandidatesResultV1,
+        selected_text: &str,
+    ) {
+        save_japanese_word_candidates_result_to_connection(
+            connection,
+            result,
+            ProviderKind::Gemini,
+            "gemini-2.5-flash-lite",
+            selected_text,
+        )
+        .expect("save ja2en result");
     }
 
     fn form_count_for_lexeme(
@@ -1726,6 +2072,81 @@ mod tests {
     #[test]
     fn normalizes_lookup_key() {
         assert_eq!(normalize_lookup_key("  Went\nHome  "), "went home");
+    }
+
+    #[test]
+    fn save_japanese_word_candidates_inserts_ja_lexeme_and_schema() {
+        let mut connection = Connection::open_in_memory().expect("memory sqlite");
+        initialize_schema(&connection).expect("schema");
+        let result = japanese_word_candidates_result("採用");
+        save_japanese(&mut connection, &result, "採用");
+
+        let language: String = connection
+            .query_row(
+                "select language from user_lexemes where canonical_key = '採用'",
+                [],
+                |row| row.get(0),
+            )
+            .expect("lexeme language");
+        assert_eq!(language, "ja");
+
+        let schema_version: String = connection
+            .query_row(
+                "select schema_version from card_snapshots where active = 1",
+                [],
+                |row| row.get(0),
+            )
+            .expect("snapshot schema");
+        assert_eq!(schema_version, LEXI_JP_WORD_CANDIDATES_V1_SCHEMA_VERSION);
+
+        let result_language: String = connection
+            .query_row(
+                "select result_language from card_snapshots where active = 1",
+                [],
+                |row| row.get(0),
+            )
+            .expect("result language");
+        assert_eq!(result_language, "en");
+    }
+
+    #[test]
+    fn loads_cached_japanese_word_candidates_by_query() {
+        let mut connection = Connection::open_in_memory().expect("memory sqlite");
+        initialize_schema(&connection).expect("schema");
+        let result = japanese_word_candidates_result("採用");
+        save_japanese(&mut connection, &result, "採用");
+
+        let cached =
+            load_cached_japanese_word_candidates_from_connection(&connection, "採用", "en")
+                .expect("cache lookup")
+                .expect("cached ja2en result");
+
+        assert_eq!(cached.query, "採用");
+        assert_eq!(cached.candidates[0].term, "adopt");
+        assert_eq!(
+            cached.schema_version,
+            LEXI_JP_WORD_CANDIDATES_V1_SCHEMA_VERSION
+        );
+    }
+
+    #[test]
+    fn save_japanese_word_candidates_mutation_payload_has_ja_language_no_prompt() {
+        let mut connection = Connection::open_in_memory().expect("memory sqlite");
+        initialize_schema(&connection).expect("schema");
+        let result = japanese_word_candidates_result("微妙");
+        save_japanese(&mut connection, &result, "微妙");
+
+        let payload: String = connection
+            .query_row("select payload_json from mutation_outbox", [], |row| {
+                row.get(0)
+            })
+            .expect("mutation payload");
+
+        assert!(payload.contains("\"language\":\"ja\""));
+        assert!(payload.contains(LEXI_JP_WORD_CANDIDATES_V1_SCHEMA_VERSION));
+        assert!(payload.contains("\"canonicalText\":\"微妙\""));
+        assert!(!payload.to_ascii_lowercase().contains("prompt"));
+        assert!(!payload.contains("selectedText"));
     }
 
     #[test]
