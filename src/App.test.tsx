@@ -3,10 +3,12 @@ import { createSignal } from "solid-js";
 import { render } from "solid-js/web";
 import { invoke } from "@tauri-apps/api/core";
 import {
+  LEXI_JP_WORD_CANDIDATES_V1_SCHEMA_VERSION,
   LEXI_TEXT_TRANSLATION_V1_SCHEMA_VERSION,
   LEXI_RESULT_V1_SCHEMA_VERSION,
   TRANSLATION_NOTE_VALUES,
   validateLexiResultV1,
+  type JapaneseWordCandidatesResultV1,
   type LexiResult,
   type LexiResultV1,
   type TextTranslationResultV1,
@@ -270,8 +272,45 @@ function mockTextTranslationResult(): TextTranslationResultV1 {
   };
 }
 
+function mockJapaneseWordCandidatesResult(): JapaneseWordCandidatesResultV1 {
+  return {
+    schemaVersion: LEXI_JP_WORD_CANDIDATES_V1_SCHEMA_VERSION,
+    mode: "jp-word-candidates",
+    sourceLanguage: "ja",
+    resultLanguage: "en",
+    query: "採用",
+    candidates: [
+      {
+        term: "adopt",
+        partOfSpeech: "動詞",
+        japaneseNuance: "方針・方法・制度などを選んで使い始める",
+        usageNote: "案や制度を公式に取り入れる文脈で使う。",
+        example: {
+          sentence: "The team adopted a new policy.",
+          japanese: "チームは新しい方針を採用した。",
+        },
+        confidence: "high",
+      },
+      {
+        term: "hire",
+        partOfSpeech: "動詞",
+        japaneseNuance: "人を雇う",
+        usageNote: "人材を採用する文脈で使う。",
+        example: {
+          sentence: "They hired a new engineer.",
+          japanese: "新しいエンジニアを採用した。",
+        },
+        confidence: "medium",
+      },
+    ],
+    warnings: ["Context can change the best choice."],
+  };
+}
+
 function emptyPartialResultForTest() {
   return {
+    query: null,
+    candidates: [],
     headword: null,
     inflections: [],
     translations: [],
@@ -343,6 +382,66 @@ describe("PopupView", () => {
 
     expect(root.querySelector(".headword-voice-button")).toBeNull();
     expect(speakableHeadwordForState(readyState(mockTextTranslationResult()))).toBeNull();
+  });
+
+  it("renders japanese word candidate results with query, nuances, and examples", () => {
+    const root = renderPopup(readyState(mockJapaneseWordCandidatesResult()));
+
+    expect(root.querySelector(".headword")?.textContent).toBe("採用");
+    expect(root.querySelector(".headword-voice-button")).toBeNull();
+    expect(speakableHeadwordForState(readyState(mockJapaneseWordCandidatesResult()))).toBeNull();
+    expect(root.textContent).toContain("adopt");
+    expect(root.textContent).toContain("hire");
+    expect(root.textContent).toContain("方針・方法・制度などを選んで使い始める");
+    expect(root.textContent).toContain("The team adopted a new policy.");
+    expect(root.textContent).toContain("チームは新しい方針を採用した。");
+    expect(root.querySelectorAll(".candidate-row").length).toBe(2);
+    expect(root.querySelector(".jp-candidates-layout")).toBeInstanceOf(HTMLElement);
+  });
+
+  it("renders streaming japanese word candidates with query and partial rows", () => {
+    const root = renderPopup({
+      kind: "streaming",
+      shortcut: DEFAULT_CAPTURE_SHORTCUT,
+      requestId: 11,
+      mode: "jp-word-candidates",
+      sourceText: "採用",
+      phase: "streaming",
+      capture: readyCapture(),
+      partial: {
+        ...emptyPartialResultForTest(),
+        query: "採用",
+        candidates: [mockJapaneseWordCandidatesResult().candidates[0]],
+      },
+    });
+
+    expect(root.querySelector(".headword")?.textContent).toBe("採用");
+    expect(root.querySelector(".headword-voice-button")).toBeNull();
+    expect(root.textContent).toContain("adopt");
+    expect(root.querySelectorAll(".candidate-row.content-reveal").length).toBe(1);
+    expect(root.querySelector(".candidate-row.skeleton-row")).toBeNull();
+  });
+
+  it("renders candidate skeleton rows while streaming before any candidates arrive", () => {
+    const root = renderPopup({
+      kind: "streaming",
+      shortcut: DEFAULT_CAPTURE_SHORTCUT,
+      requestId: 12,
+      mode: "jp-word-candidates",
+      sourceText: "微妙",
+      phase: "requesting",
+      capture: readyCapture(),
+      partial: {
+        ...emptyPartialResultForTest(),
+        query: "微妙",
+      },
+    });
+
+    expect(root.querySelector(".headword")?.textContent).toBe("微妙");
+    expect(root.querySelector(".candidate-row.skeleton-row")).toBeInstanceOf(
+      HTMLElement,
+    );
+    expect(root.querySelector(".candidate-row.content-reveal")).toBeNull();
   });
 
   it("renders LexiResultV1 meaning content without old bottom actions", () => {
@@ -1086,6 +1185,10 @@ describe("PopupView", () => {
 });
 
 describe("Lexi result schema", () => {
+  it("accepts japanese word candidate results", () => {
+    expect(validateLexiResultV1(mockJapaneseWordCandidatesResult()).ok).toBe(true);
+  });
+
   it("accepts text translation results", () => {
     expect(validateLexiResultV1(mockTextTranslationResult()).ok).toBe(true);
   });

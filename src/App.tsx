@@ -17,8 +17,10 @@ import { openUrl } from "@tauri-apps/plugin-opener";
 import type { AppError } from "./lib/errors";
 import { speakText } from "./lib/speech";
 import {
+  type EnglishCandidate,
   type Idiom,
   type Inflection,
+  type JapaneseWordCandidatesResultV1,
   type LexiResult,
   type RelatedWord,
   type TextTranslationResultV1,
@@ -72,7 +74,7 @@ type PopupErrorContext = {
 type ResultTab = "meaning" | "related";
 export type ThemeMode = "light" | "dark";
 type ProviderKind = "mock" | "gemini" | "open-ai" | "deep-l";
-type ResultMode = "word-study" | "text-translation";
+type ResultMode = "word-study" | "text-translation" | "jp-word-candidates";
 
 export type ProviderSettings = {
   shortcut: string;
@@ -137,6 +139,8 @@ type GoogleSignInStart = {
 };
 
 type LexiPartialResult = {
+  query: string | null;
+  candidates: EnglishCandidate[];
   headword: string | null;
   inflections: Inflection[];
   translations: Translation[];
@@ -168,6 +172,7 @@ type TransformEvent =
       sourceWindowTitle: string | null;
       characterCount: number;
       multiline: boolean;
+      transformMode: string;
       provider: ProviderKind;
       model: string;
     }
@@ -473,6 +478,10 @@ function App() {
 
       if (payload.status === "started") {
         activeRequestId = payload.requestId;
+        const mode = resultModeFromTransformMode(
+          payload.transformMode,
+          payload.provider,
+        );
         setActiveResultTab("meaning");
         setState({
           kind: "streaming",
@@ -487,11 +496,13 @@ function App() {
           },
           partial: {
             ...emptyPartialResult(),
-            headword:
-              payload.provider === "deep-l" ? "" : payload.selectedTextPreview,
+            headword: mode === "word-study" ? payload.selectedTextPreview : null,
+            query:
+              mode === "jp-word-candidates"
+                ? payload.selectedTextPreview
+                : null,
           },
-          mode:
-            payload.provider === "deep-l" ? "text-translation" : "word-study",
+          mode,
           sourceText: payload.selectedText ?? null,
           phase: "requesting",
         });
@@ -520,7 +531,10 @@ function App() {
           requestId: payload.requestId,
           capture: fallbackCapture,
           partial: payload.partial,
-          mode: current.kind === "streaming" ? current.mode : "word-study",
+          mode:
+            current.kind === "streaming"
+              ? current.mode
+              : resultModeFromTransformMode(undefined, "gemini"),
           sourceText: current.kind === "streaming" ? current.sourceText : null,
           phase: payload.status,
         });
@@ -1457,6 +1471,18 @@ function ResultDisplayView(props: {
   void props.activeResultTab;
   void props.onSetResultTab;
 
+  const jpCandidatesResult = () =>
+    props.state.kind === "ready" &&
+    props.state.result.mode === "jp-word-candidates"
+      ? props.state.result
+      : null;
+
+  const jpCandidatesPartial = () =>
+    props.state.kind === "streaming" &&
+    props.state.mode === "jp-word-candidates"
+      ? japaneseWordCandidatesLikeFromPartial(props.state.partial)
+      : null;
+
   return (
     <Show
       when={
@@ -1472,17 +1498,29 @@ function ResultDisplayView(props: {
             props.state.mode === "text-translation"
           }
           fallback={
-            <DictionaryBody
-              result={
-                props.state.kind === "ready" &&
-                props.state.result.mode === "word-study"
-                  ? props.state.result
-                  : props.state.kind === "streaming"
-                    ? props.state.partial
-                    : emptyPartialResult()
+            <Show
+              when={jpCandidatesResult() ?? jpCandidatesPartial()}
+              fallback={
+                <DictionaryBody
+                  result={
+                    props.state.kind === "ready" &&
+                    props.state.result.mode === "word-study"
+                      ? props.state.result
+                      : props.state.kind === "streaming"
+                        ? props.state.partial
+                        : emptyPartialResult()
+                  }
+                  streaming={props.state.kind === "streaming"}
+                />
               }
-              streaming={props.state.kind === "streaming"}
-            />
+            >
+              {(result) => (
+                <JapaneseWordCandidatesBody
+                  result={result()}
+                  streaming={props.state.kind === "streaming"}
+                />
+              )}
+            </Show>
           }
         >
           <LoadingTextTranslationView
@@ -1642,6 +1680,101 @@ function LoadingTextTranslationView(props: { sourceText: string }) {
         ↓
       </div>
       <SkeletonBlock class="translation-field-skeleton translated" />
+    </div>
+  );
+}
+
+type JapaneseWordCandidatesLike = {
+  query: string;
+  candidates: EnglishCandidate[];
+  warnings: string[];
+};
+
+function japaneseWordCandidatesLikeFromPartial(
+  partial: LexiPartialResult,
+): JapaneseWordCandidatesLike {
+  return {
+    query: partial.query ?? "",
+    candidates: partial.candidates,
+    warnings: partial.warnings,
+  };
+}
+
+function JapaneseWordCandidatesBody(props: {
+  result: JapaneseWordCandidatesLike | JapaneseWordCandidatesResultV1;
+  streaming?: boolean;
+}) {
+  return (
+    <div
+      class="jp-candidates-layout"
+      classList={{ streaming: props.streaming }}
+    >
+      <section class="section" aria-labelledby="candidates-title">
+        <h2 class="section-title" id="candidates-title">
+          English candidates
+        </h2>
+        <div class="candidate-list">
+          <Show
+            when={props.result.candidates.length > 0}
+            fallback={<CandidateSkeletonList />}
+          >
+            <Index each={props.result.candidates}>
+              {(candidate) => (
+                <article class="candidate-row content-reveal">
+                  <div class="candidate-head">
+                    <span class="candidate-term">{candidate().term}</span>
+                    <span class="candidate-meta">
+                      <span class="pos-icon" aria-label={candidate().partOfSpeech}>
+                        {partOfSpeechMark(candidate().partOfSpeech)}
+                      </span>
+                      <span
+                        class={`candidate-confidence confidence-${candidate().confidence}`}
+                      >
+                        {candidate().confidence}
+                      </span>
+                    </span>
+                  </div>
+                  <p class="candidate-nuance">{candidate().japaneseNuance}</p>
+                  <p class="candidate-usage">{candidate().usageNote}</p>
+                  <p class="candidate-example">
+                    <HighlightedExample
+                      sentence={candidate().example.sentence}
+                      target={candidate().term}
+                    />
+                    <span class="example-ja">{candidate().example.japanese}</span>
+                  </p>
+                </article>
+              )}
+            </Index>
+          </Show>
+        </div>
+      </section>
+
+      <Show when={props.result.warnings.length > 0}>
+        <p class="warning-line">{props.result.warnings[0]}</p>
+      </Show>
+    </div>
+  );
+}
+
+function CandidateSkeletonList() {
+  return (
+    <>
+      <CandidateSkeletonRow />
+      <CandidateSkeletonRow compact />
+    </>
+  );
+}
+
+function CandidateSkeletonRow(props: { compact?: boolean }) {
+  return (
+    <div class="candidate-row skeleton-row" aria-hidden="true">
+      <div class="candidate-head">
+        <SkeletonBlock class={props.compact ? "line-sm" : "line-md"} />
+        <SkeletonBlock class="pos-skeleton" />
+      </div>
+      <SkeletonBlock class="line-full" />
+      <SkeletonBlock class="line-short" />
     </div>
   );
 }
@@ -2001,7 +2134,13 @@ function titleForState(state: PopupState): string {
     case "streaming":
       return "";
     case "ready":
-      return state.result.mode === "word-study" ? state.result.headword : "";
+      if (state.result.mode === "word-study") {
+        return state.result.headword;
+      }
+      if (state.result.mode === "jp-word-candidates") {
+        return state.result.query;
+      }
+      return "";
     case "error":
       return "Error";
     case "idle":
@@ -2010,9 +2149,24 @@ function titleForState(state: PopupState): string {
 }
 
 export function speakableHeadwordForState(state: PopupState): string | null {
+  if (
+    state.kind === "ready" &&
+    (state.result.mode === "jp-word-candidates" ||
+      state.result.mode === "text-translation")
+  ) {
+    return null;
+  }
+
   if (state.kind === "ready" && state.result.mode === "word-study") {
     const headword = state.result.headword.trim();
     return headword.length > 0 ? headword : null;
+  }
+
+  if (
+    state.kind === "streaming" &&
+    (state.mode === "jp-word-candidates" || state.mode === "text-translation")
+  ) {
+    return null;
   }
 
   if (state.kind === "streaming" && state.mode === "word-study") {
@@ -2028,6 +2182,9 @@ function headwordForState(state: PopupState): string {
     if (state.mode === "text-translation") {
       return "";
     }
+    if (state.mode === "jp-word-candidates") {
+      return state.partial.query ?? "";
+    }
     return state.partial.headword ?? "";
   }
 
@@ -2041,6 +2198,10 @@ function inflectionsForState(state: PopupState): Inflection[] {
 
   if (state.kind === "ready") {
     return state.result.mode === "word-study" ? state.result.inflections : [];
+  }
+
+  if (state.kind === "streaming" && state.mode === "jp-word-candidates") {
+    return [];
   }
 
   return [];
@@ -2086,6 +2247,8 @@ function normalizeAppError(error: unknown): AppError {
 
 function emptyPartialResult(): LexiPartialResult {
   return {
+    query: null,
+    candidates: [],
     headword: null,
     inflections: [],
     translations: [],
@@ -2094,6 +2257,21 @@ function emptyPartialResult(): LexiPartialResult {
     idioms: [],
     warnings: [],
   };
+}
+
+function resultModeFromTransformMode(
+  transformMode: string | undefined,
+  provider: ProviderKind,
+): ResultMode {
+  if (
+    transformMode === "text-translation" ||
+    transformMode === "jp-word-candidates" ||
+    transformMode === "word-study"
+  ) {
+    return transformMode;
+  }
+
+  return provider === "deep-l" ? "text-translation" : "word-study";
 }
 
 function ensureSelectedModel(
