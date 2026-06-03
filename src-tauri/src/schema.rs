@@ -3,6 +3,7 @@ use serde::{Deserialize, Serialize};
 
 pub const LEXI_RESULT_V1_SCHEMA_VERSION: &str = "lexi.result.v1";
 pub const LEXI_TEXT_TRANSLATION_V1_SCHEMA_VERSION: &str = "lexi.text-translation.v1";
+pub const LEXI_JP_WORD_CANDIDATES_V1_SCHEMA_VERSION: &str = "lexi.jp-word-candidates.v1";
 pub const TRANSLATION_SENSE_KIND_VALUES: &[&str] = &["dictionary", "inflection"];
 
 pub const TRANSLATION_NOTE_VALUES: &[&str] = &[
@@ -89,6 +90,44 @@ pub struct TranslationSegment {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+pub struct CandidateExample {
+    pub sentence: String,
+    pub japanese: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum CandidateConfidence {
+    High,
+    Medium,
+    Low,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct EnglishCandidate {
+    pub term: String,
+    pub part_of_speech: String,
+    pub japanese_nuance: String,
+    pub usage_note: String,
+    pub example: CandidateExample,
+    pub confidence: CandidateConfidence,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct JapaneseWordCandidatesResultV1 {
+    pub schema_version: String,
+    pub mode: String,
+    pub source_language: String,
+    pub result_language: String,
+    pub query: String,
+    pub candidates: Vec<EnglishCandidate>,
+    pub warnings: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct TextTranslationResultV1 {
     pub schema_version: String,
     pub mode: String,
@@ -105,6 +144,7 @@ pub struct TextTranslationResultV1 {
 pub enum LexiResult {
     WordStudy(LexiResultV1),
     TextTranslation(TextTranslationResultV1),
+    JapaneseWordCandidates(JapaneseWordCandidatesResultV1),
 }
 
 impl LexiResultV1 {
@@ -216,6 +256,114 @@ impl TextTranslationResultV1 {
 
         Ok(self)
     }
+}
+
+impl JapaneseWordCandidatesResultV1 {
+    pub fn validate(self) -> Result<Self, AppError> {
+        if self.schema_version != LEXI_JP_WORD_CANDIDATES_V1_SCHEMA_VERSION {
+            return Err(AppError::invalid_model_output(format!(
+                "unsupported schemaVersion '{}'",
+                self.schema_version
+            )));
+        }
+
+        validate_required("mode", &self.mode)?;
+        if self.mode != "jp-word-candidates" {
+            return Err(AppError::invalid_model_output(format!(
+                "unsupported mode '{}'",
+                self.mode
+            )));
+        }
+        validate_required("sourceLanguage", &self.source_language)?;
+        if self.source_language != "ja" {
+            return Err(AppError::invalid_model_output(format!(
+                "unsupported sourceLanguage '{}'",
+                self.source_language
+            )));
+        }
+        validate_required("resultLanguage", &self.result_language)?;
+        if self.result_language != "en" {
+            return Err(AppError::invalid_model_output(format!(
+                "unsupported resultLanguage '{}'",
+                self.result_language
+            )));
+        }
+        validate_required("query", &self.query)?;
+        validate_max_chars("query", &self.query, 32)?;
+        validate_non_empty("candidates", self.candidates.len())?;
+        validate_max_len("candidates", self.candidates.len(), 8)?;
+
+        for (index, candidate) in self.candidates.iter().enumerate() {
+            validate_english_candidate(&format!("candidates[{index}]"), candidate)?;
+        }
+
+        for (index, warning) in self.warnings.iter().enumerate() {
+            validate_required(&format!("warnings[{index}]"), warning)?;
+            validate_max_chars(&format!("warnings[{index}]"), warning, 120)?;
+        }
+
+        Ok(self)
+    }
+}
+
+pub fn parse_japanese_word_candidates_result_v1(
+    raw_json: &str,
+) -> Result<JapaneseWordCandidatesResultV1, AppError> {
+    let mut result =
+        serde_json::from_str::<JapaneseWordCandidatesResultV1>(raw_json).map_err(|error| {
+            AppError::invalid_model_output(format!("model output JSON parse failed: {error}"))
+        })?;
+
+    normalize_japanese_word_candidates_result(&mut result);
+    result.validate()
+}
+
+fn normalize_japanese_word_candidates_result(result: &mut JapaneseWordCandidatesResultV1) {
+    trim_string(&mut result.schema_version);
+    trim_string(&mut result.mode);
+    trim_string(&mut result.source_language);
+    trim_string(&mut result.result_language);
+    trim_string(&mut result.query);
+
+    for candidate in &mut result.candidates {
+        trim_string(&mut candidate.term);
+        trim_string(&mut candidate.part_of_speech);
+        trim_string(&mut candidate.japanese_nuance);
+        trim_string(&mut candidate.usage_note);
+        trim_string(&mut candidate.example.sentence);
+        trim_string(&mut candidate.example.japanese);
+        let mut part_of_speech = Some(candidate.part_of_speech.clone());
+        normalize_translation_note(&mut part_of_speech);
+        if let Some(normalized) = part_of_speech {
+            candidate.part_of_speech = normalized;
+        }
+    }
+}
+
+fn validate_english_candidate(field: &str, value: &EnglishCandidate) -> Result<(), AppError> {
+    validate_required(&format!("{field}.term"), &value.term)?;
+    validate_max_chars(&format!("{field}.term"), &value.term, 48)?;
+    validate_required(&format!("{field}.partOfSpeech"), &value.part_of_speech)?;
+    validate_translation_note(&format!("{field}.partOfSpeech"), &value.part_of_speech)?;
+    validate_required(&format!("{field}.japaneseNuance"), &value.japanese_nuance)?;
+    validate_max_chars(
+        &format!("{field}.japaneseNuance"),
+        &value.japanese_nuance,
+        80,
+    )?;
+    validate_required(&format!("{field}.usageNote"), &value.usage_note)?;
+    validate_max_chars(&format!("{field}.usageNote"), &value.usage_note, 120)?;
+    validate_candidate_example(&format!("{field}.example"), &value.example)?;
+    Ok(())
+}
+
+fn validate_candidate_example(field: &str, value: &CandidateExample) -> Result<(), AppError> {
+    validate_required(&format!("{field}.sentence"), &value.sentence)?;
+    validate_required(&format!("{field}.japanese"), &value.japanese)?;
+    validate_max_chars(&format!("{field}.sentence"), &value.sentence, 96)?;
+    validate_max_chars(&format!("{field}.japanese"), &value.japanese, 96)?;
+
+    Ok(())
 }
 
 pub fn parse_lexi_result_v1(raw_json: &str) -> Result<LexiResultV1, AppError> {
@@ -464,7 +612,9 @@ fn validate_inflection(field: &str, value: &Inflection) -> Result<(), AppError> 
 #[cfg(test)]
 mod tests {
     use super::{
-        parse_lexi_result_v1, LexiResultV1, TextTranslationResultV1, TranslationSegment,
+        parse_japanese_word_candidates_result_v1, parse_lexi_result_v1, CandidateConfidence,
+        CandidateExample, EnglishCandidate, JapaneseWordCandidatesResultV1, LexiResultV1,
+        TextTranslationResultV1, TranslationSegment, LEXI_JP_WORD_CANDIDATES_V1_SCHEMA_VERSION,
         LEXI_RESULT_V1_SCHEMA_VERSION, LEXI_TEXT_TRANSLATION_V1_SCHEMA_VERSION,
     };
     use crate::errors::AppErrorCode;
@@ -949,5 +1099,155 @@ mod tests {
 
         assert_eq!(error.code, AppErrorCode::InvalidModelOutput);
         assert!(error.diagnostic_message.contains("unsupported mode"));
+    }
+
+    fn valid_japanese_word_candidates() -> JapaneseWordCandidatesResultV1 {
+        JapaneseWordCandidatesResultV1 {
+            schema_version: LEXI_JP_WORD_CANDIDATES_V1_SCHEMA_VERSION.to_string(),
+            mode: "jp-word-candidates".to_string(),
+            source_language: "ja".to_string(),
+            result_language: "en".to_string(),
+            query: "採用".to_string(),
+            candidates: vec![
+                EnglishCandidate {
+                    term: "adopt".to_string(),
+                    part_of_speech: "動詞".to_string(),
+                    japanese_nuance: "方針・方法・制度などを選んで使い始める".to_string(),
+                    usage_note: "案や制度を公式に取り入れる文脈で使う。".to_string(),
+                    example: CandidateExample {
+                        sentence: "The team adopted a new policy.".to_string(),
+                        japanese: "チームは新しい方針を採用した。".to_string(),
+                    },
+                    confidence: CandidateConfidence::High,
+                },
+                EnglishCandidate {
+                    term: "hire".to_string(),
+                    part_of_speech: "動詞".to_string(),
+                    japanese_nuance: "人を雇う".to_string(),
+                    usage_note: "人材を採用する文脈で使う。".to_string(),
+                    example: CandidateExample {
+                        sentence: "They hired a new engineer.".to_string(),
+                        japanese: "新しいエンジニアを採用した。".to_string(),
+                    },
+                    confidence: CandidateConfidence::Medium,
+                },
+            ],
+            warnings: vec![],
+        }
+    }
+
+    #[test]
+    fn accepts_valid_japanese_word_candidates() {
+        let result = valid_japanese_word_candidates()
+            .validate()
+            .expect("valid ja2en schema");
+
+        assert_eq!(result.query, "採用");
+        assert_eq!(result.candidates.len(), 2);
+    }
+
+    #[test]
+    fn rejects_empty_japanese_word_candidates_query() {
+        let mut result = valid_japanese_word_candidates();
+        result.query = " ".to_string();
+
+        let error = result.validate().expect_err("empty query should fail");
+
+        assert_eq!(error.code, AppErrorCode::InvalidModelOutput);
+        assert!(error.diagnostic_message.contains("query"));
+    }
+
+    #[test]
+    fn rejects_wrong_japanese_word_candidates_languages() {
+        let mut result = valid_japanese_word_candidates();
+        result.source_language = "en".to_string();
+
+        let error = result
+            .validate()
+            .expect_err("wrong source language should fail");
+
+        assert_eq!(error.code, AppErrorCode::InvalidModelOutput);
+        assert!(error.diagnostic_message.contains("sourceLanguage"));
+
+        let mut result = valid_japanese_word_candidates();
+        result.result_language = "ja".to_string();
+
+        let error = result
+            .validate()
+            .expect_err("wrong result language should fail");
+
+        assert_eq!(error.code, AppErrorCode::InvalidModelOutput);
+        assert!(error.diagnostic_message.contains("resultLanguage"));
+    }
+
+    #[test]
+    fn rejects_zero_japanese_word_candidates() {
+        let mut result = valid_japanese_word_candidates();
+        result.candidates = vec![];
+
+        let error = result.validate().expect_err("zero candidates should fail");
+
+        assert_eq!(error.code, AppErrorCode::InvalidModelOutput);
+        assert!(error.diagnostic_message.contains("candidates"));
+    }
+
+    #[test]
+    fn rejects_too_many_japanese_word_candidates() {
+        let mut result = valid_japanese_word_candidates();
+        result.candidates = (0..9)
+            .map(|index| EnglishCandidate {
+                term: format!("term{index}"),
+                part_of_speech: "名詞".to_string(),
+                japanese_nuance: "意味".to_string(),
+                usage_note: "使い方".to_string(),
+                example: CandidateExample {
+                    sentence: format!("Example sentence {index}."),
+                    japanese: format!("例文{index}。"),
+                },
+                confidence: CandidateConfidence::Low,
+            })
+            .collect();
+
+        let error = result
+            .validate()
+            .expect_err("more than eight candidates should fail");
+
+        assert_eq!(error.code, AppErrorCode::InvalidModelOutput);
+        assert!(error.diagnostic_message.contains("candidates"));
+    }
+
+    #[test]
+    fn rejects_japanese_word_candidate_without_example() {
+        let mut result = valid_japanese_word_candidates();
+        result.candidates[0].example.japanese = " ".to_string();
+
+        let error = result.validate().expect_err("missing example should fail");
+
+        assert_eq!(error.code, AppErrorCode::InvalidModelOutput);
+        assert!(error
+            .diagnostic_message
+            .contains("candidates[0].example.japanese"));
+    }
+
+    #[test]
+    fn rejects_overlong_japanese_word_candidate_term() {
+        let mut result = valid_japanese_word_candidates();
+        result.candidates[0].term = "a".repeat(49);
+
+        let error = result.validate().expect_err("overlong term should fail");
+
+        assert_eq!(error.code, AppErrorCode::InvalidModelOutput);
+        assert!(error.diagnostic_message.contains("term"));
+    }
+
+    #[test]
+    fn parse_japanese_word_candidates_accepts_valid_json() {
+        let result = valid_japanese_word_candidates();
+        let raw_json = serde_json::to_string(&result).expect("result serializes");
+
+        let parsed = parse_japanese_word_candidates_result_v1(&raw_json)
+            .expect("valid ja2en json should parse");
+
+        assert_eq!(parsed.query, "採用");
     }
 }
