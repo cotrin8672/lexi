@@ -27,7 +27,7 @@ Rust backend:
 - `sync`: persists local mutations, pushes them to Supabase, and pulls server revisions into SQLite.
 - `tray`: owns the system tray icon, tray menu, and popup re-show behavior.
 - `errors`: defines stable error codes and user-safe diagnostics.
-- `schema`: defines word-study and text-translation result contracts and rejects missing required fields or unknown schema versions.
+- `schema`: defines word-study, Japanese word-candidates, and text-translation result contracts and rejects missing required fields or unknown schema versions.
 - `commands`: exposes narrow Tauri commands to the frontend.
 
 Solid frontend:
@@ -186,7 +186,11 @@ Initial provider policy:
 
 Provider responses must be parsed into a versioned Rust struct before frontend rendering. The frontend should render validated data, not raw model text. Word-study mode uses the configured LLM provider and expects structured dictionary data: a dictionary/base-form headword for single inflected words, optional irregular inflections for noun plurals and verb past or past participle forms, one to three dictionary-style Japanese sense entries with a `null` or enumerated part-of-speech note, one short example sentence plus Japanese translation per sense entry, an intuitive usage nuance for the headword, optional near-word synonyms with per-word usage comparisons, optional idioms with Japanese meanings and short English examples, and warnings when useful data is unavailable. Translation entries should be separated by real English-side dictionary sense boundaries such as part of speech, countability, transitivity, concrete versus abstract use, legal/social versus technical use, or idiomatic use. The provider prompt should collapse near-duplicate Japanese paraphrases, alternative renderings, and collocation differences instead of filling the list with repeated explanations or Japanese synonyms such as `近づく` and `接近する`; examples like `採用` versus `採択` for `adoption`, or `デモ` versus `実演` for the same `demonstration` sense, should be merged unless they represent truly separate English senses. Antonyms are omitted from the word-study contract.
 
-Text-translation mode is selected by backend heuristics before provider dispatch when the captured text looks sentence-like: newline, sentence punctuation, clause punctuation, or five or more whitespace-delimited tokens. It uses DeepL and wraps the response in `lexi.text-translation.v1` with `translatedText`, optional detected source language, source/translation segments, and warnings. The first implementation emits one full-selection segment; later alignment can split segments without changing the top-level mode.
+Japanese word-candidates mode is selected when the captured text is not sentence-like and contains Hiragana, Katakana, or CJK ideographs. It uses the configured Gemini, OpenAI, or Mock provider (not DeepL) and wraps the response in `lexi.jp-word-candidates.v1` with a normalized Japanese `query`, one to eight English `candidates`, and warnings. Each candidate includes part of speech, Japanese nuance, usage note, confidence, and a required English example with Japanese translation. The popup header shows the Japanese query during streaming and ready states; headword pronunciation is omitted in v1.
+
+Text-translation mode is selected by backend heuristics before provider dispatch when the captured text looks sentence-like: newline, sentence punctuation, clause punctuation, five or more whitespace-delimited tokens, or Japanese text longer than 32 non-whitespace characters. It uses DeepL and wraps the response in `lexi.text-translation.v1` with `translatedText`, optional detected source language, source/translation segments, and warnings. The first implementation emits one full-selection segment; later alignment can split segments without changing the top-level mode.
+
+Transform events include `transformMode` on `Started` so the frontend can render the correct skeleton and header before the provider identity is inferred.
 
 ## Persistence and Sync Architecture
 
@@ -195,7 +199,7 @@ Vocabulary persistence should use Supabase as the cloud source of truth and SQLi
 The main local tables are expected to separate:
 
 - global dictionary entries imported from EJDict;
-- user lexemes keyed by canonical text and language;
+- user lexemes keyed by canonical text and language (`en` for English word-study headwords, `ja` for Japanese lookup queries);
 - lexeme forms that alias selected or inflected forms to candidate lexemes;
 - AI-generated card snapshots or enrichment records;
 - lookup events;
@@ -224,7 +228,7 @@ Supabase remains the source of truth. SQLite holds optimistic local projection, 
 
 Phase 10 sync engine:
 
-- Rust module `sync` pushes pending `mutation_outbox` rows through Supabase RPC `apply_vocabulary_mutation`.
+- Rust module `sync` pushes pending `mutation_outbox` rows through Supabase RPC `apply_vocabulary_mutation`. The RPC is schema-aware: English word-study cards may derive `part_of_speech` from `content.translations[0].note` and irregular aliases from `content.inflections`; Japanese word-candidates cards keep `part_of_speech` null and only persist canonical plus payload `forms`.
 - On first sync for a signed-in user, `vocabulary_bootstrap` copies canonical vocabulary tables from Supabase into SQLite.
 - Incremental pull uses Supabase RPC `pull_vocabulary_changes` keyed by monotonically increasing `server_revision`.
 - Background sync starts after app setup, successful Google sign-in, local vocabulary saves, and a periodic one-minute timer. Concurrent requests collapse into one in-flight sync plus a follow-up cycle.

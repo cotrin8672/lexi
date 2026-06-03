@@ -17,7 +17,7 @@ In scope:
 - Global shortcut activation.
 - Selected-text acquisition through a native Windows backend pipeline: clipboard-preserving copy first for low latency, then Windows UI Automation where supported.
 - Compact popup UI for loading, result, copy, retry, and error states.
-- Two typed transformation workflows: word study for single words and short phrases, and text translation for sentence-like selections.
+- Three typed transformation workflows: English word study for single words and short English phrases, Japanese word-candidates lookup for short Japanese terms and phrases, and text translation for sentence-like selections.
 - Local settings for capture shortcut, close shortcut, provider configuration, model name, API key state, and prompt preset.
 - Focused logging that excludes selected text and model payloads.
 
@@ -37,7 +37,7 @@ Out of scope for the first release:
 - Clicking the tray icon shows the popup. The tray menu provides explicit show and quit actions.
 - When the shortcut fires, the app attempts to read the current foreground selection.
 - If selected text is available, the app opens the popup at the user's previous position for the current app session, with only first launch using the configured default position.
-- The app classifies the selected text after backend capture succeeds. Single words and short phrase-like selections use the configured LLM word-study provider; sentence-like selections use DeepL text translation.
+- The app classifies the selected text after backend capture succeeds. English single words and short phrases use the configured LLM word-study provider. Short Japanese words and phrases containing Hiragana, Katakana, or CJK ideographs use the same LLM provider in Japanese word-candidates mode. Sentence-like selections use DeepL text translation.
 - Once the provider request starts, the popup should show a normalized preview of the selected word/text in the headword slot while the structured response is still pending.
 - The app should consume provider responses as streams where supported and render completed partial fields before the final response is validated.
 - While selection capture or structured response fields are pending, the popup should reserve the final result layout with skeleton placeholders and fade each field in as soon as that field is available.
@@ -52,7 +52,7 @@ Out of scope for the first release:
 - Close shortcut settings are recorded from an actual key chord, default to `Escape`, and may omit modifier keys.
 - The user can open settings from a gear button in the popup header.
 - The user can dismiss the popup with the configured close shortcut or the close affordance without quitting the app.
-- Word-study results should expose pronunciation for the displayed headword through a header voice control and a configurable popup-local shortcut (`Ctrl+Shift+P` by default). Pronunciation should use Windows SAPI through the Rust backend and must not send the headword to an external TTS API.
+- Word-study results should expose pronunciation for the displayed headword through a header voice control and a configurable popup-local shortcut (`Ctrl+Shift+P` by default). Pronunciation should use Windows SAPI through the Rust backend and must not send the headword to an external TTS API. Japanese word-candidates results show the Japanese query in the header but do not expose headword pronunciation in v1.
 - Result UI actions such as copy and retry are not shown in the bottom action bar.
 - The app shows actionable errors for unsupported selection source, empty selection, shortcut registration failure, provider failure, and schema validation failure.
 
@@ -187,7 +187,42 @@ Rules:
 - `translatedText` is required and should contain the full translated selection.
 - `segments` may start as a single source/translation pair and can be expanded later for sentence-by-sentence alignment.
 - Raw provider responses must be wrapped in this schema before frontend rendering.
-- Sentence-like selections are detected by backend heuristics such as newline, sentence punctuation, clause punctuation, or five or more whitespace-delimited tokens.
+- Sentence-like selections are detected by backend heuristics such as newline, sentence punctuation, clause punctuation, five or more whitespace-delimited tokens, or Japanese text longer than 32 non-whitespace characters.
+
+Japanese word-candidates schema:
+
+```json
+{
+  "schemaVersion": "lexi.jp-word-candidates.v1",
+  "mode": "jp-word-candidates",
+  "sourceLanguage": "ja",
+  "resultLanguage": "en",
+  "query": "採用",
+  "candidates": [
+    {
+      "term": "adopt",
+      "partOfSpeech": "動詞",
+      "japaneseNuance": "string",
+      "usageNote": "string",
+      "example": {
+        "sentence": "string",
+        "japanese": "string"
+      },
+      "confidence": "high | medium | low"
+    }
+  ],
+  "warnings": ["string"]
+}
+```
+
+Rules:
+
+- `query` is the normalized Japanese lookup term, max 32 characters.
+- `candidates` contains 1 to 8 English lemmas or short fixed phrases. Prefer 3 to 6 useful candidates.
+- Each candidate must include `example.sentence` and `example.japanese`.
+- Candidates must be English lemmas, not Japanese glosses or duplicate inflected English forms.
+- Sentence-like Japanese selections route to text translation and are not saved as vocabulary cards.
+- Validated ja2en results may be cached locally and synced as vocabulary cards with `language = ja`, `result_language = en`, and canonical text equal to `query`.
 
 ## Error Handling
 
