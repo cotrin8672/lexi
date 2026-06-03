@@ -1,10 +1,12 @@
 use crate::{
     errors::AppError,
     schema::{
-        parse_lexi_result_v1, ExampleSentence, Idiom, Inflection, LexiResult, LexiResultV1,
-        RelatedWord, TextTranslationResultV1, Translation, TranslationSegment,
-        LEXI_RESULT_V1_SCHEMA_VERSION, LEXI_TEXT_TRANSLATION_V1_SCHEMA_VERSION,
-        TRANSLATION_NOTE_VALUES,
+        parse_japanese_word_candidates_result_v1, parse_lexi_result_v1, CandidateConfidence,
+        CandidateExample, EnglishCandidate, ExampleSentence, Idiom, Inflection,
+        JapaneseWordCandidatesResultV1, LexiResult, LexiResultV1, RelatedWord,
+        TextTranslationResultV1, Translation, TranslationSegment,
+        LEXI_JP_WORD_CANDIDATES_V1_SCHEMA_VERSION, LEXI_RESULT_V1_SCHEMA_VERSION,
+        LEXI_TEXT_TRANSLATION_V1_SCHEMA_VERSION, TRANSLATION_NOTE_VALUES,
     },
     secrets,
     settings::{ProviderKind, SettingsState},
@@ -36,10 +38,33 @@ fn persist_word_study_result(
     }
 }
 
+fn persist_japanese_word_candidates_result(
+    app: &AppHandle,
+    result: &JapaneseWordCandidatesResultV1,
+    provider: ProviderKind,
+    model: &str,
+    selected_text: &str,
+) {
+    if vocabulary::save_japanese_word_candidates_result(app, result, provider, model, selected_text)
+        .is_ok()
+    {
+        sync::schedule_sync(app.clone());
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum TransformMode {
     WordStudy,
     TextTranslation,
+    JapaneseWordCandidates,
+}
+
+fn transform_mode_label(mode: TransformMode) -> &'static str {
+    match mode {
+        TransformMode::WordStudy => "word-study",
+        TransformMode::TextTranslation => "text-translation",
+        TransformMode::JapaneseWordCandidates => "jp-word-candidates",
+    }
 }
 
 #[derive(Debug, Default)]
@@ -111,6 +136,8 @@ pub struct TransformCaptureInput {
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct LexiPartialResult {
+    pub query: Option<String>,
+    pub candidates: Vec<EnglishCandidate>,
     pub headword: Option<String>,
     pub inflections: Vec<Inflection>,
     pub translations: Vec<Translation>,
@@ -143,6 +170,7 @@ pub enum TransformEvent {
         source_window_title: Option<String>,
         character_count: usize,
         multiline: bool,
+        transform_mode: &'static str,
         provider: ProviderKind,
         model: String,
     },
@@ -167,7 +195,7 @@ pub enum TransformEvent {
 }
 
 impl LexiPartialResult {
-    fn from_result(result: &LexiResultV1) -> Self {
+    fn from_word_study_result(result: &LexiResultV1) -> Self {
         Self {
             headword: Some(result.headword.clone()),
             inflections: result.inflections.clone(),
@@ -176,11 +204,23 @@ impl LexiPartialResult {
             synonyms: result.synonyms.clone(),
             idioms: result.idioms.clone(),
             warnings: result.warnings.clone(),
+            ..Self::default()
+        }
+    }
+
+    fn from_japanese_word_candidates_result(result: &JapaneseWordCandidatesResultV1) -> Self {
+        Self {
+            query: Some(result.query.clone()),
+            candidates: result.candidates.clone(),
+            warnings: result.warnings.clone(),
+            ..Self::default()
         }
     }
 
     fn is_empty(&self) -> bool {
-        self.headword.is_none()
+        self.query.is_none()
+            && self.candidates.is_empty()
+            && self.headword.is_none()
             && self.inflections.is_empty()
             && self.translations.is_empty()
             && self.nuance.is_none()
@@ -198,6 +238,18 @@ pub struct MockProvider;
 
 impl LlmProvider for MockProvider {
     fn transform(&self, request: &TransformRequest) -> Result<LexiResult, AppError> {
+        let mode = classify_transform_mode(&request.selected_text);
+        if mode == TransformMode::TextTranslation {
+            return Err(AppError::provider_not_configured(
+                "Mock provider does not support text translation",
+            ));
+        }
+        if mode == TransformMode::JapaneseWordCandidates {
+            return Ok(LexiResult::JapaneseWordCandidates(
+                mock_japanese_word_candidates(&request.selected_text, &request.result_language),
+            ));
+        }
+
         Ok(LexiResult::WordStudy(LexiResultV1 {
             schema_version: LEXI_RESULT_V1_SCHEMA_VERSION.to_string(),
             mode: "word-study".to_string(),
@@ -288,10 +340,29 @@ fn selected_text_preview(selected_text: &str) -> String {
         .collect()
 }
 
-fn classify_transform_mode(selected_text: &str) -> TransformMode {
+fn contains_japanese_script(text: &str) -> bool {
+    text.chars().any(|character| {
+        matches!(
+            character,
+            '\u{3040}'..='\u{309F}'
+                | '\u{30A0}'..='\u{30FF}'
+                | '\u{3400}'..='\u{4DBF}'
+                | '\u{4E00}'..='\u{9FFF}'
+                | '\u{F900}'..='\u{FAFF}'
+        )
+    })
+}
+
+fn non_whitespace_char_count(text: &str) -> usize {
+    text.chars()
+        .filter(|character| !character.is_whitespace())
+        .count()
+}
+
+fn is_sentence_like_selection(selected_text: &str) -> bool {
     let trimmed = selected_text.trim();
     if trimmed.is_empty() {
-        return TransformMode::WordStudy;
+        return false;
     }
 
     let token_count = trimmed.split_whitespace().count();
@@ -303,8 +374,25 @@ fn classify_transform_mode(selected_text: &str) -> TransformMode {
         .chars()
         .any(|character| matches!(character, ',' | ';' | ':' | '、' | '，' | '；' | '：'));
 
-    if has_newline || has_sentence_terminal || has_clause_punctuation || token_count >= 5 {
-        TransformMode::TextTranslation
+    has_newline
+        || has_sentence_terminal
+        || has_clause_punctuation
+        || token_count >= 5
+        || (contains_japanese_script(trimmed) && non_whitespace_char_count(trimmed) > 32)
+}
+
+fn classify_transform_mode(selected_text: &str) -> TransformMode {
+    let trimmed = selected_text.trim();
+    if trimmed.is_empty() {
+        return TransformMode::WordStudy;
+    }
+
+    if is_sentence_like_selection(trimmed) {
+        return TransformMode::TextTranslation;
+    }
+
+    if contains_japanese_script(trimmed) {
+        TransformMode::JapaneseWordCandidates
     } else {
         TransformMode::WordStudy
     }
@@ -312,15 +400,160 @@ fn classify_transform_mode(selected_text: &str) -> TransformMode {
 
 fn provider_for_mode(settings_provider: ProviderKind, mode: TransformMode) -> ProviderKind {
     match mode {
-        TransformMode::WordStudy => settings_provider,
+        TransformMode::WordStudy | TransformMode::JapaneseWordCandidates => settings_provider,
         TransformMode::TextTranslation => ProviderKind::DeepL,
     }
 }
 
 fn model_for_mode(settings_model: &str, mode: TransformMode) -> &str {
     match mode {
-        TransformMode::WordStudy => settings_model,
+        TransformMode::WordStudy | TransformMode::JapaneseWordCandidates => settings_model,
         TransformMode::TextTranslation => ProviderKind::DeepL.default_model(),
+    }
+}
+
+fn result_language_for_mode(settings_result_language: &str, mode: TransformMode) -> String {
+    match mode {
+        TransformMode::JapaneseWordCandidates => "en".to_string(),
+        TransformMode::WordStudy | TransformMode::TextTranslation => {
+            settings_result_language.to_string()
+        }
+    }
+}
+
+fn mock_japanese_word_candidates(
+    selected_text: &str,
+    result_language: &str,
+) -> JapaneseWordCandidatesResultV1 {
+    let query = normalize_japanese_query(selected_text);
+    let candidates = match query.as_str() {
+        "採用" => vec![
+            mock_english_candidate(
+                "adopt",
+                "動詞",
+                "方針・方法・制度などを選んで使い始める",
+                "案や制度を公式に取り入れる文脈で使う。",
+                "The team adopted a new policy.",
+                "チームは新しい方針を採用した。",
+                CandidateConfidence::High,
+            ),
+            mock_english_candidate(
+                "hire",
+                "動詞",
+                "人を雇う",
+                "人材を採用する文脈で使う。",
+                "They hired a new engineer.",
+                "新しいエンジニアを採用した。",
+                CandidateConfidence::High,
+            ),
+            mock_english_candidate(
+                "employ",
+                "動詞",
+                "雇用する",
+                "組織が人を使う一般的な文脈で使う。",
+                "The company employs 200 people.",
+                "その会社は200人を雇用している。",
+                CandidateConfidence::Medium,
+            ),
+            mock_english_candidate(
+                "accept",
+                "動詞",
+                "受け入れる",
+                "提案や条件を承認する文脈で使う。",
+                "The board accepted the plan.",
+                "取締役会はその案を採用した。",
+                CandidateConfidence::Medium,
+            ),
+        ],
+        "微妙" => vec![
+            mock_english_candidate(
+                "subtle",
+                "形容詞",
+                "気づきにくいほど繊細な",
+                "変化や違いが小さいときに使う。",
+                "There was a subtle change in tone.",
+                "口調に微妙な変化があった。",
+                CandidateConfidence::High,
+            ),
+            mock_english_candidate(
+                "questionable",
+                "形容詞",
+                "疑わしい・微妙な",
+                "良し悪しがはっきりしない評価で使う。",
+                "That decision looks questionable.",
+                "その判断は微妙に見える。",
+                CandidateConfidence::Medium,
+            ),
+            mock_english_candidate(
+                "awkward",
+                "形容詞",
+                "気まずい・ぎこちない",
+                "人間関係や雰囲気がぎこちないときに使う。",
+                "The silence felt awkward.",
+                "沈黙が気まずく感じられた。",
+                CandidateConfidence::Medium,
+            ),
+            mock_english_candidate(
+                "delicate",
+                "形容詞",
+                "扱いにくい・繊細な",
+                "状況や話題がデリケートなときに使う。",
+                "It is a delicate situation.",
+                "それは微妙な状況だ。",
+                CandidateConfidence::Low,
+            ),
+        ],
+        _ => vec![mock_english_candidate(
+            "example",
+            "名詞",
+            "例として示す語",
+            "モック用の汎用候補です。",
+            "This is an example sentence.",
+            "これは例文です。",
+            CandidateConfidence::Medium,
+        )],
+    };
+
+    let warnings = if query == "微妙" {
+        vec!["文脈によって最適な英語語が大きく変わります。".to_string()]
+    } else {
+        vec!["Provider 設定が mock のため、実際の API は呼び出していません。".to_string()]
+    };
+
+    JapaneseWordCandidatesResultV1 {
+        schema_version: LEXI_JP_WORD_CANDIDATES_V1_SCHEMA_VERSION.to_string(),
+        mode: "jp-word-candidates".to_string(),
+        source_language: "ja".to_string(),
+        result_language: result_language.to_string(),
+        query,
+        candidates,
+        warnings,
+    }
+}
+
+fn normalize_japanese_query(selected_text: &str) -> String {
+    selected_text.trim().chars().take(32).collect()
+}
+
+fn mock_english_candidate(
+    term: &str,
+    part_of_speech: &str,
+    japanese_nuance: &str,
+    usage_note: &str,
+    sentence: &str,
+    japanese: &str,
+    confidence: CandidateConfidence,
+) -> EnglishCandidate {
+    EnglishCandidate {
+        term: term.to_string(),
+        part_of_speech: part_of_speech.to_string(),
+        japanese_nuance: japanese_nuance.to_string(),
+        usage_note: usage_note.to_string(),
+        example: CandidateExample {
+            sentence: sentence.to_string(),
+            japanese: japanese.to_string(),
+        },
+        confidence,
     }
 }
 
@@ -435,12 +668,12 @@ async fn run_transform_stream_for_capture(
     let settings_state = app.state::<SettingsState>();
     let settings = settings_state.load_settings(&app)?;
     let selected_text_preview = selected_text_preview(&selected_text);
+    let transform_mode = classify_transform_mode(&selected_text);
     let request = TransformRequest {
         selected_text,
-        result_language: settings.result_language.clone(),
+        result_language: result_language_for_mode(&settings.result_language, transform_mode),
         prompt_mode: settings.prompt_mode.clone(),
     };
-    let transform_mode = classify_transform_mode(&request.selected_text);
 
     let _ = app.emit(
         TRANSFORM_EVENT,
@@ -458,6 +691,7 @@ async fn run_transform_stream_for_capture(
             source_window_title: capture.source_window_title,
             character_count: capture.character_count,
             multiline: capture.multiline,
+            transform_mode: transform_mode_label(transform_mode),
             provider: provider_for_mode(settings.provider, transform_mode),
             model: model_for_mode(&settings.model, transform_mode).to_string(),
         },
@@ -482,11 +716,30 @@ async fn run_transform_stream_for_capture(
 
     if settings.provider == ProviderKind::DeepL {
         return Err(AppError::provider_not_configured(
-            "DeepL only supports text translation; choose Gemini or OpenAI for word study",
+            "DeepL only supports text translation; choose Gemini or OpenAI for word study and Japanese lookup",
         ));
     }
 
-    if let Ok(Some(result)) =
+    if transform_mode == TransformMode::JapaneseWordCandidates {
+        if let Ok(Some(result)) = vocabulary::load_japanese_word_candidates(
+            &app,
+            &request.selected_text,
+            &request.result_language,
+        )
+        .await
+        {
+            let _ = app.emit(
+                TRANSFORM_EVENT,
+                TransformEvent::Ready {
+                    request_id,
+                    result: LexiResult::JapaneseWordCandidates(result),
+                    provider: settings.provider,
+                    model: settings.model,
+                },
+            );
+            return Ok(());
+        }
+    } else if let Ok(Some(result)) =
         vocabulary::load_word_study(&app, &request.selected_text, &settings.result_language).await
     {
         let _ = app.emit(
@@ -503,34 +756,14 @@ async fn run_transform_stream_for_capture(
 
     if settings.provider == ProviderKind::Mock {
         let result = MockProvider.transform(&request)?;
-        let LexiResult::WordStudy(word_result) = result else {
-            unreachable!("mock provider only returns word-study results")
-        };
-        let partial = LexiPartialResult::from_result(&word_result);
-        let _ = app.emit(
-            TRANSFORM_EVENT,
-            TransformEvent::Streaming {
-                request_id,
-                partial: partial.clone(),
-            },
-        );
-        let _ = app.emit(
-            TRANSFORM_EVENT,
-            TransformEvent::Ready {
-                request_id,
-                result: LexiResult::WordStudy(word_result.clone()),
-                provider: settings.provider,
-                model: settings.model.clone(),
-            },
-        );
-        persist_word_study_result(
+        return emit_mock_stream_result(
             &app,
-            &word_result,
+            request_id,
+            result,
             settings.provider,
             &settings.model,
             &request.selected_text,
         );
-        return Ok(());
     }
 
     let api_key = settings_state
@@ -545,15 +778,31 @@ async fn run_transform_stream_for_capture(
 
     let raw_json = match settings.provider {
         ProviderKind::Gemini => {
-            call_gemini_stream(&app, request_id, &api_key, &settings.model, &request).await?
+            call_gemini_stream(
+                &app,
+                request_id,
+                &api_key,
+                &settings.model,
+                &request,
+                transform_mode,
+            )
+            .await?
         }
         ProviderKind::OpenAi => {
-            call_openai_stream(&app, request_id, &api_key, &settings.model, &request).await?
+            call_openai_stream(
+                &app,
+                request_id,
+                &api_key,
+                &settings.model,
+                &request,
+                transform_mode,
+            )
+            .await?
         }
         ProviderKind::Mock => unreachable!("mock provider returned above"),
         ProviderKind::DeepL => unreachable!("DeepL text translation returned above"),
     };
-    let partial = partial_from_json_fragment(&raw_json);
+    let partial = partial_from_json_fragment(&raw_json, transform_mode);
     let _ = app.emit(
         TRANSFORM_EVENT,
         TransformEvent::Validating {
@@ -561,23 +810,113 @@ async fn run_transform_stream_for_capture(
             partial,
         },
     );
-    let result = parse_lexi_result_v1(&raw_json)?;
-    persist_word_study_result(
-        &app,
-        &result,
-        settings.provider,
-        &settings.model,
-        &request.selected_text,
-    );
-    let _ = app.emit(
-        TRANSFORM_EVENT,
-        TransformEvent::Ready {
-            request_id,
-            result: LexiResult::WordStudy(result),
-            provider: settings.provider,
-            model: settings.model,
-        },
-    );
+
+    match transform_mode {
+        TransformMode::JapaneseWordCandidates => {
+            let result = parse_japanese_word_candidates_result_v1(&raw_json)?;
+            persist_japanese_word_candidates_result(
+                &app,
+                &result,
+                settings.provider,
+                &settings.model,
+                &request.selected_text,
+            );
+            let _ = app.emit(
+                TRANSFORM_EVENT,
+                TransformEvent::Ready {
+                    request_id,
+                    result: LexiResult::JapaneseWordCandidates(result),
+                    provider: settings.provider,
+                    model: settings.model,
+                },
+            );
+        }
+        TransformMode::WordStudy => {
+            let result = parse_lexi_result_v1(&raw_json)?;
+            persist_word_study_result(
+                &app,
+                &result,
+                settings.provider,
+                &settings.model,
+                &request.selected_text,
+            );
+            let _ = app.emit(
+                TRANSFORM_EVENT,
+                TransformEvent::Ready {
+                    request_id,
+                    result: LexiResult::WordStudy(result),
+                    provider: settings.provider,
+                    model: settings.model,
+                },
+            );
+        }
+        TransformMode::TextTranslation => unreachable!("text translation returned above"),
+    }
+
+    Ok(())
+}
+
+fn emit_mock_stream_result(
+    app: &AppHandle,
+    request_id: u64,
+    result: LexiResult,
+    provider: ProviderKind,
+    model: &str,
+    selected_text: &str,
+) -> Result<(), AppError> {
+    match result {
+        LexiResult::WordStudy(word_result) => {
+            let partial = LexiPartialResult::from_word_study_result(&word_result);
+            let _ = app.emit(
+                TRANSFORM_EVENT,
+                TransformEvent::Streaming {
+                    request_id,
+                    partial: partial.clone(),
+                },
+            );
+            let _ = app.emit(
+                TRANSFORM_EVENT,
+                TransformEvent::Ready {
+                    request_id,
+                    result: LexiResult::WordStudy(word_result.clone()),
+                    provider,
+                    model: model.to_string(),
+                },
+            );
+            persist_word_study_result(app, &word_result, provider, model, selected_text);
+        }
+        LexiResult::JapaneseWordCandidates(ja_result) => {
+            let partial = LexiPartialResult::from_japanese_word_candidates_result(&ja_result);
+            let _ = app.emit(
+                TRANSFORM_EVENT,
+                TransformEvent::Streaming {
+                    request_id,
+                    partial: partial.clone(),
+                },
+            );
+            let _ = app.emit(
+                TRANSFORM_EVENT,
+                TransformEvent::Ready {
+                    request_id,
+                    result: LexiResult::JapaneseWordCandidates(ja_result.clone()),
+                    provider,
+                    model: model.to_string(),
+                },
+            );
+            persist_japanese_word_candidates_result(
+                app,
+                &ja_result,
+                provider,
+                model,
+                selected_text,
+            );
+        }
+        LexiResult::TextTranslation(_) => {
+            return Err(AppError::provider_not_configured(
+                "Mock provider does not support text translation",
+            ));
+        }
+    }
 
     Ok(())
 }
@@ -616,12 +955,13 @@ pub async fn run_transform(
     settings_state: tauri::State<'_, SettingsState>,
 ) -> Result<TransformResult, AppError> {
     let settings = settings_state.load_settings(&app)?;
+    let selected_text = selected_text_state.current()?;
+    let transform_mode = classify_transform_mode(&selected_text);
     let request = TransformRequest {
-        selected_text: selected_text_state.current()?,
-        result_language: settings.result_language.clone(),
+        selected_text,
+        result_language: result_language_for_mode(&settings.result_language, transform_mode),
         prompt_mode: settings.prompt_mode.clone(),
     };
-    let transform_mode = classify_transform_mode(&request.selected_text);
 
     if transform_mode == TransformMode::TextTranslation {
         let api_key = secrets::read_api_key(ProviderKind::DeepL)?
@@ -637,11 +977,25 @@ pub async fn run_transform(
 
     if settings.provider == ProviderKind::DeepL {
         return Err(AppError::provider_not_configured(
-            "DeepL only supports text translation; choose Gemini or OpenAI for word study",
+            "DeepL only supports text translation; choose Gemini or OpenAI for word study and Japanese lookup",
         ));
     }
 
-    if let Ok(Some(result)) =
+    if transform_mode == TransformMode::JapaneseWordCandidates {
+        if let Ok(Some(result)) = vocabulary::load_japanese_word_candidates(
+            &app,
+            &request.selected_text,
+            &request.result_language,
+        )
+        .await
+        {
+            return Ok(TransformResult {
+                result: LexiResult::JapaneseWordCandidates(result),
+                provider: settings.provider,
+                model: settings.model,
+            });
+        }
+    } else if let Ok(Some(result)) =
         vocabulary::load_word_study(&app, &request.selected_text, &settings.result_language).await
     {
         return Ok(TransformResult {
@@ -653,14 +1007,24 @@ pub async fn run_transform(
 
     if settings.provider == ProviderKind::Mock {
         let result = MockProvider.transform(&request)?;
-        if let LexiResult::WordStudy(word_result) = &result {
-            persist_word_study_result(
+        match &result {
+            LexiResult::WordStudy(word_result) => persist_word_study_result(
                 &app,
                 word_result,
                 settings.provider,
                 &settings.model,
                 &request.selected_text,
-            );
+            ),
+            LexiResult::JapaneseWordCandidates(ja_result) => {
+                persist_japanese_word_candidates_result(
+                    &app,
+                    ja_result,
+                    settings.provider,
+                    &settings.model,
+                    &request.selected_text,
+                )
+            }
+            LexiResult::TextTranslation(_) => {}
         }
         return Ok(TransformResult {
             result,
@@ -679,22 +1043,50 @@ pub async fn run_transform(
             ))
         })?;
 
-    let result = match settings.provider {
-        ProviderKind::Gemini => call_gemini(&api_key, &settings.model, &request).await?,
-        ProviderKind::OpenAi => call_openai(&api_key, &settings.model, &request).await?,
-        ProviderKind::Mock => unreachable!("mock provider returned above"),
-        ProviderKind::DeepL => unreachable!("DeepL text translation returned above"),
+    let lexi_result = match transform_mode {
+        TransformMode::JapaneseWordCandidates => {
+            let result = match settings.provider {
+                ProviderKind::Gemini => {
+                    call_gemini_japanese_word_candidates(&api_key, &settings.model, &request)
+                        .await?
+                }
+                ProviderKind::OpenAi => {
+                    call_openai_japanese_word_candidates(&api_key, &settings.model, &request)
+                        .await?
+                }
+                ProviderKind::Mock => unreachable!("mock provider returned above"),
+                ProviderKind::DeepL => unreachable!("DeepL text translation returned above"),
+            };
+            persist_japanese_word_candidates_result(
+                &app,
+                &result,
+                settings.provider,
+                &settings.model,
+                &request.selected_text,
+            );
+            LexiResult::JapaneseWordCandidates(result)
+        }
+        TransformMode::WordStudy => {
+            let result = match settings.provider {
+                ProviderKind::Gemini => call_gemini(&api_key, &settings.model, &request).await?,
+                ProviderKind::OpenAi => call_openai(&api_key, &settings.model, &request).await?,
+                ProviderKind::Mock => unreachable!("mock provider returned above"),
+                ProviderKind::DeepL => unreachable!("DeepL text translation returned above"),
+            };
+            persist_word_study_result(
+                &app,
+                &result,
+                settings.provider,
+                &settings.model,
+                &request.selected_text,
+            );
+            LexiResult::WordStudy(result)
+        }
+        TransformMode::TextTranslation => unreachable!("text translation returned above"),
     };
-    persist_word_study_result(
-        &app,
-        &result,
-        settings.provider,
-        &settings.model,
-        &request.selected_text,
-    );
 
     Ok(TransformResult {
-        result: LexiResult::WordStudy(result),
+        result: lexi_result,
         provider: settings.provider,
         model: settings.model,
     })
@@ -766,6 +1158,39 @@ Quality rules:
 Selected text:
 {text}"#,
         schema_version = LEXI_RESULT_V1_SCHEMA_VERSION,
+        result_language = request.result_language,
+        text = request.selected_text,
+    )
+}
+
+fn build_japanese_word_candidates_prompt(request: &TransformRequest) -> String {
+    format!(
+        r#"You are Lexi's Japanese-to-English word lookup formatter. Analyze the selected Japanese word or short phrase and return one compact JSON object only.
+
+Hard requirements:
+- Output must match schemaVersion "{schema_version}" and mode "jp-word-candidates".
+- Do not include markdown, prose outside JSON, comments, or code fences.
+- sourceLanguage must be "ja" and resultLanguage must be "{result_language}".
+- query must be the normalized Japanese lookup term from the selection, max 32 characters.
+- candidates must contain 1 to 8 English word or short phrase options. Prefer 3 to 6 useful candidates.
+- Do not output Japanese translations as candidates.
+- Do not list inflected English forms as separate candidates; use lemmas.
+- Merge duplicates by lemma and sense unless register is the useful distinction.
+- Rank candidates by practical usefulness for a Japanese user choosing an English word.
+- Every candidate must include example.sentence (natural English using that candidate) and example.japanese (its Japanese translation).
+- Keep examples generic; do not quote surrounding selected context.
+- confidence must be exactly "high", "medium", or "low".
+- warnings: empty unless the Japanese query is context-dependent, ambiguous, slang-like, or too short to rank confidently.
+
+Field contract:
+- term: English lemma or short fixed phrase, max 48 characters.
+- partOfSpeech: exactly one label from: 名詞, 動詞, 形容詞, 副詞, 前置詞, 接続詞, 代名詞, 助動詞, 冠詞, 間投詞, 句, 成句, 接頭辞, 接尾辞.
+- japaneseNuance: concise meaning of this candidate in Japanese, max 80 characters.
+- usageNote: one short Japanese sentence explaining when to choose this candidate over nearby ones, max 120 characters.
+
+Selected text:
+{text}"#,
+        schema_version = LEXI_JP_WORD_CANDIDATES_V1_SCHEMA_VERSION,
         result_language = request.result_language,
         text = request.selected_text,
     )
@@ -941,8 +1366,8 @@ fn lexi_result_schema() -> Value {
         "properties": {
             "schemaVersion": { "type": "string", "enum": [LEXI_RESULT_V1_SCHEMA_VERSION] },
             "mode": { "type": "string", "enum": ["word-study"] },
-            "sourceLanguage": { "type": "string" },
-            "resultLanguage": { "type": "string" },
+            "sourceLanguage": { "type": "string", "enum": ["ja"] },
+            "resultLanguage": { "type": "string", "enum": ["en"] },
             "headword": { "type": "string" },
             "inflections": { "type": "array", "minItems": 0, "maxItems": 3, "items": { "$ref": "#/$defs/inflection" } },
             "translations": { "type": "array", "minItems": 1, "maxItems": 3, "items": { "$ref": "#/$defs/translation" } },
@@ -1023,7 +1448,24 @@ async fn call_openai_stream(
     api_key: &str,
     model: &str,
     request: &TransformRequest,
+    transform_mode: TransformMode,
 ) -> Result<String, AppError> {
+    let (system_prompt, user_prompt, schema_name, schema) = match transform_mode {
+        TransformMode::JapaneseWordCandidates => (
+            "You return only strict, compact JSON for Lexi's Japanese word-candidates schema.",
+            build_japanese_word_candidates_prompt(request),
+            "lexi_jp_word_candidates_v1",
+            lexi_jp_word_candidates_schema(),
+        ),
+        TransformMode::WordStudy => (
+            "You return only strict, compact JSON for Lexi's word-study schema. Keep every field short and contrastive.",
+            build_word_study_prompt(request),
+            "lexi_result_v1",
+            lexi_result_schema(),
+        ),
+        TransformMode::TextTranslation => unreachable!("text translation uses DeepL"),
+    };
+
     let client = reqwest_client()?;
     let response = client
         .post("https://api.openai.com/v1/chat/completions")
@@ -1034,26 +1476,29 @@ async fn call_openai_stream(
             "messages": [
                 {
                     "role": "system",
-                    "content": "You return only strict, compact JSON for Lexi's word-study schema. Keep every field short and contrastive."
+                    "content": system_prompt
                 },
                 {
                     "role": "user",
-                    "content": build_word_study_prompt(request)
+                    "content": user_prompt
                 }
             ],
             "response_format": {
                 "type": "json_schema",
                 "json_schema": {
-                    "name": "lexi_result_v1",
+                    "name": schema_name,
                     "strict": true,
-                    "schema": lexi_result_schema()
+                    "schema": schema
                 }
             }
         }))
         .send()
         .await
         .map_err(|error| {
-            AppError::provider_request_failed(format!("OpenAI stream request failed: {error}"), true)
+            AppError::provider_request_failed(
+                format!("OpenAI stream request failed: {error}"),
+                true,
+            )
         })?;
 
     if !response.status().is_success() {
@@ -1063,7 +1508,14 @@ async fn call_openai_stream(
         ));
     }
 
-    read_sse_stream(app, request_id, response, parse_openai_stream_text).await
+    read_sse_stream(
+        app,
+        request_id,
+        response,
+        parse_openai_stream_text,
+        transform_mode,
+    )
+    .await
 }
 
 async fn call_gemini_stream(
@@ -1072,7 +1524,20 @@ async fn call_gemini_stream(
     api_key: &str,
     model: &str,
     request: &TransformRequest,
+    transform_mode: TransformMode,
 ) -> Result<String, AppError> {
+    let (prompt, response_schema) = match transform_mode {
+        TransformMode::JapaneseWordCandidates => (
+            build_japanese_word_candidates_prompt(request),
+            gemini_jp_word_candidates_schema(),
+        ),
+        TransformMode::WordStudy => (
+            build_word_study_prompt(request),
+            gemini_lexi_result_schema(),
+        ),
+        TransformMode::TextTranslation => unreachable!("text translation uses DeepL"),
+    };
+
     let client = reqwest_client()?;
     let url = format!(
         "https://generativelanguage.googleapis.com/v1beta/models/{model}:streamGenerateContent"
@@ -1084,14 +1549,14 @@ async fn call_gemini_stream(
             "contents": [
                 {
                     "role": "user",
-                    "parts": [{ "text": build_word_study_prompt(request) }]
+                    "parts": [{ "text": prompt }]
                 }
             ],
             "generationConfig": {
                 "temperature": 0.2,
                 "maxOutputTokens": MAX_OUTPUT_TOKENS,
                 "responseMimeType": "application/json",
-                "responseSchema": gemini_lexi_result_schema()
+                "responseSchema": response_schema
             }
         }))
         .send()
@@ -1110,7 +1575,14 @@ async fn call_gemini_stream(
         ));
     }
 
-    read_sse_stream(app, request_id, response, parse_gemini_stream_text).await
+    read_sse_stream(
+        app,
+        request_id,
+        response,
+        parse_gemini_stream_text,
+        transform_mode,
+    )
+    .await
 }
 
 async fn read_sse_stream(
@@ -1118,6 +1590,7 @@ async fn read_sse_stream(
     request_id: u64,
     response: reqwest::Response,
     parse_text: fn(&str) -> Result<StreamTextDelta, AppError>,
+    transform_mode: TransformMode,
 ) -> Result<String, AppError> {
     let mut stream = response.bytes_stream();
     let mut sse_buffer = String::new();
@@ -1139,7 +1612,7 @@ async fn read_sse_stream(
             }
             if let Some(text) = delta.text {
                 content.push_str(&text);
-                let partial = partial_from_json_fragment(&content);
+                let partial = partial_from_json_fragment(&content, transform_mode);
                 if !partial.is_empty() && partial != last_partial {
                     last_partial = partial.clone();
                     let _ = app.emit(
@@ -1312,6 +1785,65 @@ async fn call_openai(
     parse_lexi_result_v1(content)
 }
 
+async fn call_openai_japanese_word_candidates(
+    api_key: &str,
+    model: &str,
+    request: &TransformRequest,
+) -> Result<JapaneseWordCandidatesResultV1, AppError> {
+    let client = reqwest_client()?;
+
+    let response = client
+        .post("https://api.openai.com/v1/chat/completions")
+        .bearer_auth(api_key)
+        .json(&json!({
+            "model": model,
+            "messages": [
+                {
+                    "role": "system",
+                    "content": "You return only strict, compact JSON for Lexi's Japanese word-candidates schema."
+                },
+                {
+                    "role": "user",
+                    "content": build_japanese_word_candidates_prompt(request)
+                }
+            ],
+            "response_format": {
+                "type": "json_schema",
+                "json_schema": {
+                    "name": "lexi_jp_word_candidates_v1",
+                    "strict": true,
+                    "schema": lexi_jp_word_candidates_schema()
+                }
+            }
+        }))
+        .send()
+        .await
+        .map_err(|error| {
+            AppError::provider_request_failed(format!("OpenAI request failed: {error}"), true)
+        })?;
+
+    if !response.status().is_success() {
+        return Err(AppError::provider_request_failed(
+            format!("OpenAI request returned HTTP {}", response.status()),
+            response.status().as_u16() == 429 || response.status().is_server_error(),
+        ));
+    }
+
+    let payload = response
+        .json::<OpenAiChatResponse>()
+        .await
+        .map_err(|error| {
+            AppError::invalid_model_output(format!("OpenAI response parse failed: {error}"))
+        })?;
+    let content = payload
+        .choices
+        .first()
+        .map(|choice| choice.message.content.as_str())
+        .ok_or_else(|| AppError::invalid_model_output("OpenAI response had no choices"))?;
+
+    parse_japanese_word_candidates_result_v1(content)
+}
+
 async fn call_gemini(
     api_key: &str,
     model: &str,
@@ -1361,6 +1893,57 @@ async fn call_gemini(
         .ok_or_else(|| AppError::invalid_model_output("Gemini response had no text part"))?;
 
     parse_lexi_result_v1(content)
+}
+
+async fn call_gemini_japanese_word_candidates(
+    api_key: &str,
+    model: &str,
+    request: &TransformRequest,
+) -> Result<JapaneseWordCandidatesResultV1, AppError> {
+    let client = reqwest_client()?;
+    let url =
+        format!("https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent");
+
+    let response = client
+        .post(url)
+        .query(&[("key", api_key)])
+        .json(&json!({
+            "contents": [
+                {
+                    "role": "user",
+                    "parts": [{ "text": build_japanese_word_candidates_prompt(request) }]
+                }
+            ],
+            "generationConfig": {
+                "temperature": 0.2,
+                "maxOutputTokens": MAX_OUTPUT_TOKENS,
+                "responseMimeType": "application/json",
+                "responseSchema": gemini_jp_word_candidates_schema()
+            }
+        }))
+        .send()
+        .await
+        .map_err(|error| {
+            AppError::provider_request_failed(format!("Gemini request failed: {error}"), true)
+        })?;
+
+    if !response.status().is_success() {
+        return Err(AppError::provider_request_failed(
+            format!("Gemini request returned HTTP {}", response.status()),
+            response.status().as_u16() == 429 || response.status().is_server_error(),
+        ));
+    }
+
+    let payload = response.json::<GeminiResponse>().await.map_err(|error| {
+        AppError::invalid_model_output(format!("Gemini response parse failed: {error}"))
+    })?;
+    let content = payload
+        .candidates
+        .first()
+        .and_then(gemini_candidate_text)
+        .ok_or_else(|| AppError::invalid_model_output("Gemini response had no text part"))?;
+
+    parse_japanese_word_candidates_result_v1(content)
 }
 
 async fn call_deepl_text_translation(
@@ -1454,8 +2037,8 @@ fn gemini_lexi_result_schema() -> Value {
         "properties": {
             "schemaVersion": { "type": "STRING", "enum": [LEXI_RESULT_V1_SCHEMA_VERSION] },
             "mode": { "type": "STRING", "enum": ["word-study"] },
-            "sourceLanguage": { "type": "STRING" },
-            "resultLanguage": { "type": "STRING" },
+            "sourceLanguage": { "type": "STRING", "enum": ["ja"] },
+            "resultLanguage": { "type": "STRING", "enum": ["en"] },
             "headword": { "type": "STRING" },
             "inflections": {
                 "type": "ARRAY",
@@ -1545,19 +2128,161 @@ fn gemini_idiom_schema() -> Value {
     })
 }
 
-fn partial_from_json_fragment(fragment: &str) -> LexiPartialResult {
-    if let Ok(result) = serde_json::from_str::<LexiResultV1>(fragment) {
-        return LexiPartialResult::from_result(&result);
-    }
+fn lexi_jp_word_candidates_schema() -> Value {
+    json!({
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+            "schemaVersion",
+            "mode",
+            "sourceLanguage",
+            "resultLanguage",
+            "query",
+            "candidates",
+            "warnings"
+        ],
+        "properties": {
+            "schemaVersion": { "type": "string", "enum": [LEXI_JP_WORD_CANDIDATES_V1_SCHEMA_VERSION] },
+            "mode": { "type": "string", "enum": ["jp-word-candidates"] },
+            "sourceLanguage": { "type": "string" },
+            "resultLanguage": { "type": "string" },
+            "query": { "type": "string" },
+            "candidates": {
+                "type": "array",
+                "minItems": 1,
+                "maxItems": 8,
+                "items": { "$ref": "#/$defs/candidate" }
+            },
+            "warnings": { "type": "array", "items": { "type": "string" } }
+        },
+        "$defs": {
+            "exampleSentence": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["sentence", "japanese"],
+                "properties": {
+                    "sentence": { "type": "string" },
+                    "japanese": { "type": "string" }
+                }
+            },
+            "candidate": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                    "term",
+                    "partOfSpeech",
+                    "japaneseNuance",
+                    "usageNote",
+                    "example",
+                    "confidence"
+                ],
+                "properties": {
+                    "term": { "type": "string" },
+                    "partOfSpeech": {
+                        "type": "string",
+                        "enum": TRANSLATION_NOTE_VALUES
+                    },
+                    "japaneseNuance": { "type": "string" },
+                    "usageNote": { "type": "string" },
+                    "example": { "$ref": "#/$defs/exampleSentence" },
+                    "confidence": {
+                        "type": "string",
+                        "enum": ["high", "medium", "low"]
+                    }
+                }
+            }
+        }
+    })
+}
 
-    LexiPartialResult {
-        headword: extract_string_field(fragment, "headword"),
-        inflections: extract_object_array::<Inflection>(fragment, "inflections"),
-        translations: extract_object_array::<Translation>(fragment, "translations"),
-        nuance: extract_string_field(fragment, "nuance"),
-        synonyms: extract_object_array::<RelatedWord>(fragment, "synonyms"),
-        idioms: extract_object_array::<Idiom>(fragment, "idioms"),
-        warnings: extract_string_array(fragment, "warnings"),
+fn gemini_jp_word_candidates_schema() -> Value {
+    json!({
+        "type": "OBJECT",
+        "required": [
+            "schemaVersion",
+            "mode",
+            "sourceLanguage",
+            "resultLanguage",
+            "query",
+            "candidates",
+            "warnings"
+        ],
+        "properties": {
+            "schemaVersion": { "type": "STRING", "enum": [LEXI_JP_WORD_CANDIDATES_V1_SCHEMA_VERSION] },
+            "mode": { "type": "STRING", "enum": ["jp-word-candidates"] },
+            "sourceLanguage": { "type": "STRING" },
+            "resultLanguage": { "type": "STRING" },
+            "query": { "type": "STRING" },
+            "candidates": {
+                "type": "ARRAY",
+                "minItems": 1,
+                "maxItems": 8,
+                "items": gemini_jp_candidate_schema()
+            },
+            "warnings": { "type": "ARRAY", "items": { "type": "STRING" } }
+        }
+    })
+}
+
+fn gemini_jp_candidate_schema() -> Value {
+    json!({
+        "type": "OBJECT",
+        "required": [
+            "term",
+            "partOfSpeech",
+            "japaneseNuance",
+            "usageNote",
+            "example",
+            "confidence"
+        ],
+        "properties": {
+            "term": { "type": "STRING" },
+            "partOfSpeech": {
+                "type": "STRING",
+                "enum": TRANSLATION_NOTE_VALUES
+            },
+            "japaneseNuance": { "type": "STRING" },
+            "usageNote": { "type": "STRING" },
+            "example": gemini_example_sentence_schema(),
+            "confidence": {
+                "type": "STRING",
+                "enum": ["high", "medium", "low"]
+            }
+        }
+    })
+}
+
+fn partial_from_json_fragment(fragment: &str, transform_mode: TransformMode) -> LexiPartialResult {
+    match transform_mode {
+        TransformMode::JapaneseWordCandidates => {
+            if let Ok(result) = serde_json::from_str::<JapaneseWordCandidatesResultV1>(fragment) {
+                return LexiPartialResult::from_japanese_word_candidates_result(&result);
+            }
+
+            LexiPartialResult {
+                query: extract_string_field(fragment, "query"),
+                candidates: extract_object_array::<EnglishCandidate>(fragment, "candidates"),
+                warnings: extract_string_array(fragment, "warnings"),
+                ..LexiPartialResult::default()
+            }
+        }
+        TransformMode::WordStudy => {
+            if let Ok(result) = serde_json::from_str::<LexiResultV1>(fragment) {
+                return LexiPartialResult::from_word_study_result(&result);
+            }
+
+            LexiPartialResult {
+                headword: extract_string_field(fragment, "headword"),
+                inflections: extract_object_array::<Inflection>(fragment, "inflections"),
+                translations: extract_object_array::<Translation>(fragment, "translations"),
+                nuance: extract_string_field(fragment, "nuance"),
+                synonyms: extract_object_array::<RelatedWord>(fragment, "synonyms"),
+                idioms: extract_object_array::<Idiom>(fragment, "idioms"),
+                warnings: extract_string_array(fragment, "warnings"),
+                ..LexiPartialResult::default()
+            }
+        }
+        TransformMode::TextTranslation => LexiPartialResult::default(),
     }
 }
 
@@ -1772,12 +2497,29 @@ struct DeepLTranslation {
 #[cfg(test)]
 mod tests {
     use super::{
-        build_word_study_prompt, classify_transform_mode, gemini_lexi_result_schema,
-        lexi_result_schema, mock_headword, mock_inflections, parse_gemini_stream_text,
-        parse_openai_stream_text, parse_sse_event_text, partial_from_json_fragment, pop_sse_event,
-        provider_finish_reason_indicates_truncation, selected_text_preview, sse_data_payload,
-        TransformMode,
+        build_japanese_word_candidates_prompt, build_word_study_prompt, classify_transform_mode,
+        gemini_lexi_result_schema, lexi_result_schema, mock_headword, mock_inflections,
+        parse_gemini_stream_text, parse_openai_stream_text, parse_sse_event_text,
+        partial_from_json_fragment, pop_sse_event, provider_finish_reason_indicates_truncation,
+        result_language_for_mode, selected_text_preview, sse_data_payload, TransformMode,
     };
+    use crate::schema::CandidateConfidence;
+
+    #[test]
+    fn japanese_word_candidates_force_english_result_language() {
+        assert_eq!(
+            result_language_for_mode("ja", TransformMode::JapaneseWordCandidates),
+            "en"
+        );
+        assert_eq!(
+            result_language_for_mode("ja", TransformMode::WordStudy),
+            "ja"
+        );
+        assert_eq!(
+            result_language_for_mode("ja", TransformMode::TextTranslation),
+            "ja"
+        );
+    }
 
     #[test]
     fn sse_parser_splits_crlf_delimited_events() {
@@ -1999,7 +2741,39 @@ mod tests {
     }
 
     #[test]
-    fn classifies_sentence_like_selection_for_text_translation() {
+    fn classifies_japanese_word_candidates() {
+        for query in ["採用", "微妙", "責任を取る"] {
+            assert_eq!(
+                classify_transform_mode(query),
+                TransformMode::JapaneseWordCandidates,
+                "expected JapaneseWordCandidates for '{query}'"
+            );
+        }
+    }
+
+    #[test]
+    fn classifies_japanese_sentence_like_for_text_translation() {
+        assert_eq!(
+            classify_transform_mode("これはテストです。"),
+            TransformMode::TextTranslation
+        );
+        assert_eq!(
+            classify_transform_mode("A、B"),
+            TransformMode::TextTranslation
+        );
+        assert_eq!(
+            classify_transform_mode("一行目\n二行目"),
+            TransformMode::TextTranslation
+        );
+        let long_japanese = "あ".repeat(33);
+        assert_eq!(
+            classify_transform_mode(&long_japanese),
+            TransformMode::TextTranslation
+        );
+    }
+
+    #[test]
+    fn classifies_english_word_study_and_text_translation() {
         assert_eq!(
             classify_transform_mode("This is a selected sentence."),
             TransformMode::TextTranslation
@@ -2008,6 +2782,11 @@ mod tests {
             classify_transform_mode("one two three four five"),
             TransformMode::TextTranslation
         );
+        assert_eq!(
+            classify_transform_mode("one two three four"),
+            TransformMode::WordStudy
+        );
+        assert_eq!(classify_transform_mode("subtle"), TransformMode::WordStudy);
         assert_eq!(
             classify_transform_mode("take off"),
             TransformMode::WordStudy
@@ -2024,17 +2803,30 @@ mod tests {
             classify_transform_mode("hello, world"),
             TransformMode::TextTranslation
         );
-        assert_eq!(
-            classify_transform_mode("one two three four"),
-            TransformMode::WordStudy
-        );
         assert_eq!(classify_transform_mode("   "), TransformMode::WordStudy);
+    }
+
+    #[test]
+    fn japanese_word_candidates_prompt_requires_examples() {
+        let prompt = build_japanese_word_candidates_prompt(&super::TransformRequest {
+            selected_text: "採用".to_string(),
+            result_language: "en".to_string(),
+            prompt_mode: "jp-word-candidates".to_string(),
+        });
+
+        assert!(prompt.contains("lexi.jp-word-candidates.v1"));
+        assert!(prompt.contains("jp-word-candidates"));
+        assert!(prompt.contains("example.sentence"));
+        assert!(prompt.contains("example.japanese"));
+        assert!(prompt.contains("Every candidate must include example"));
+        assert!(prompt.contains("Do not output Japanese translations as candidates"));
     }
 
     #[test]
     fn partial_json_fragment_extracts_headword_before_completion() {
         let partial = partial_from_json_fragment(
             r#"{"schemaVersion":"lexi.result.v1","headword":"subtle","translations":[{"#,
+            TransformMode::WordStudy,
         );
 
         assert_eq!(partial.headword.as_deref(), Some("subtle"));
@@ -2045,12 +2837,28 @@ mod tests {
     fn partial_json_fragment_extracts_completed_translation_rows() {
         let partial = partial_from_json_fragment(
             r#"{"headword":"go","translations":[{"text":"行く","note":"動詞","example":{"sentence":"I go.","japanese":"行く。"}}],"nuance":"#,
+            TransformMode::WordStudy,
         );
 
         assert_eq!(partial.headword.as_deref(), Some("go"));
         assert_eq!(partial.translations.len(), 1);
         assert_eq!(partial.translations[0].text, "行く");
         assert!(partial.nuance.is_none());
+    }
+
+    #[test]
+    fn partial_json_fragment_extracts_japanese_word_candidates() {
+        let partial = partial_from_json_fragment(
+            r#"{"query":"採用","candidates":[{"term":"adopt","partOfSpeech":"動詞","japaneseNuance":"取り入れる","usageNote":"制度を採用する。","example":{"sentence":"They adopted it.","japanese":"採用した。"},"confidence":"high"}],"warnings":["#,
+            TransformMode::JapaneseWordCandidates,
+        );
+
+        assert_eq!(partial.query.as_deref(), Some("採用"));
+        assert_eq!(partial.candidates.len(), 1);
+        assert_eq!(partial.candidates[0].term, "adopt");
+        assert_eq!(partial.candidates[0].example.sentence, "They adopted it.");
+        assert_eq!(partial.candidates[0].confidence, CandidateConfidence::High);
+        assert!(partial.headword.is_none());
     }
 
     #[test]
@@ -2065,6 +2873,7 @@ mod tests {
             source_window_title: None,
             character_count: 6,
             multiline: false,
+            transform_mode: "word-study",
             provider: crate::settings::ProviderKind::Mock,
             model: "mock-word-study".to_string(),
         })
