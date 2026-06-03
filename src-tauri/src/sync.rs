@@ -1135,9 +1135,8 @@ mod tests {
 
     #[test]
     fn supabase_rpcs_are_security_invoker_and_admin_gated() {
-        let apply_and_pull = include_str!(
-            "../../supabase/migrations/202605310005_apply_mutation_ensure_lexeme_forms.sql"
-        );
+        let apply_and_pull =
+            include_str!("../../supabase/migrations/202606030001_apply_mutation_schema_aware.sql");
         let original_pull =
             include_str!("../../supabase/migrations/202605310002_vocabulary_sync_rpcs.sql");
         let lookup =
@@ -1183,9 +1182,8 @@ mod tests {
 
     #[test]
     fn apply_mutation_rpc_checks_idempotency_before_writes() {
-        let migration = include_str!(
-            "../../supabase/migrations/202605310005_apply_mutation_ensure_lexeme_forms.sql"
-        );
+        let migration =
+            include_str!("../../supabase/migrations/202606030001_apply_mutation_schema_aware.sql");
         let existing_lookup = migration
             .find("select vm.server_revision, vm.status")
             .expect("existing mutation lookup");
@@ -1239,14 +1237,29 @@ mod tests {
 
     #[test]
     fn apply_mutation_migration_ensures_canonical_and_content_inflections() {
-        let migration = include_str!(
-            "../../supabase/migrations/202605310005_apply_mutation_ensure_lexeme_forms.sql"
-        );
+        let migration =
+            include_str!("../../supabase/migrations/202606030001_apply_mutation_schema_aware.sql");
 
         assert!(migration.contains("'canonical'"));
         assert!(migration.contains("'irregular'"));
         assert!(migration.contains("jsonb_array_elements(v_content->'inflections')"));
         assert!(migration.contains("v_form->>'form'"));
+        assert!(migration.contains("if v_schema_version = 'lexi.result.v1' then"));
+        assert!(migration.contains("jsonb_typeof(v_content->'inflections') = 'array'"));
+    }
+
+    #[test]
+    fn apply_mutation_schema_aware_migration_allows_ja2en() {
+        let migration =
+            include_str!("../../supabase/migrations/202606030001_apply_mutation_schema_aware.sql");
+
+        assert!(migration
+            .contains("v_schema_version not in ('lexi.result.v1', 'lexi.jp-word-candidates.v1')"));
+        assert!(migration.contains("unsupported schemaVersion"));
+        assert!(migration.contains("if v_schema_version = 'lexi.result.v1' then"));
+        assert!(migration.contains("v_part_of_speech := null"));
+        assert!(migration.contains("'canonical'"));
+        assert!(migration.contains("jsonb_typeof(v_payload->'forms') = 'array'"));
     }
 
     #[test]
