@@ -1722,8 +1722,7 @@ fn gemini_candidate_text(candidate: &GeminiCandidate) -> Option<&str> {
     candidate
         .content
         .as_ref()
-        .and_then(|content| content.parts.first())
-        .map(|part| part.text.as_str())
+        .and_then(|content| content.parts.iter().find_map(|part| part.text.as_deref()))
 }
 
 async fn call_openai(
@@ -2475,12 +2474,13 @@ struct GeminiCandidate {
 
 #[derive(Debug, Deserialize)]
 struct GeminiContent {
+    #[serde(default)]
     parts: Vec<GeminiPart>,
 }
 
 #[derive(Debug, Deserialize)]
 struct GeminiPart {
-    text: String,
+    text: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -2586,6 +2586,22 @@ mod tests {
         let delta = parse_gemini_stream_text(data).expect("finish event parses");
         assert_eq!(delta.text, None);
         assert_eq!(delta.finish_reason, Some("MAX_TOKENS".to_string()));
+    }
+
+    #[test]
+    fn gemini_stream_parser_accepts_content_without_parts() {
+        let data = r#"{"candidates":[{"content":{"role":"model"},"finishReason":"STOP"}]}"#;
+        let delta = parse_gemini_stream_text(data).expect("empty content event parses");
+        assert_eq!(delta.text, None);
+        assert_eq!(delta.finish_reason, Some("STOP".to_string()));
+    }
+
+    #[test]
+    fn gemini_stream_parser_skips_non_text_parts() {
+        let data = r#"{"candidates":[{"content":{"parts":[{"thought":true},{"text":"{\"schemaVersion\""}]}}]}"#;
+        let delta = parse_gemini_stream_text(data).expect("mixed parts event parses");
+        assert_eq!(delta.text, Some("{\"schemaVersion\"".to_string()));
+        assert_eq!(delta.finish_reason, None);
     }
 
     #[test]
