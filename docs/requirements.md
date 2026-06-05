@@ -269,6 +269,10 @@ Each error should include a stable code, a short user message, and a diagnostic 
 - Optional local history with explicit retention controls.
 - Account-backed vocabulary persistence with Supabase as the cloud source of truth and local SQLite as a read cache plus durable mutation queue.
 - EJDict-backed dictionary seed data for common English-Japanese lookup results, with AI used to fill missing nuance, examples, and usage comparisons.
+- Android-first Kotlin Multiplatform review app that turns saved vocabulary cards
+  into sentence reorder, meaning four-choice, usage distinction, and inflection
+  quizzes with local weighted answer statistics. See
+  `docs/mobile-review/implementation-plan.md`.
 - Streaming responses.
 - Tray menu and quick mode switching.
 
