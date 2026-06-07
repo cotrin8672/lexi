@@ -377,69 +377,60 @@ Always update `lastReviewedAt`, `lastSeenSequence`, and `updatedAt`.
 
 Default implementation choice:
 
-- Use Kotlin Multiplatform with an Android-first app.
+- Start with an Android-only app.
 - Use Jetpack Compose for the Android UI.
-- Put review domain logic in a shared Kotlin module from the start so it can move
-  to iOS, desktop, or another Kotlin target later.
+- Keep review domain logic as pure Kotlin packages inside the Android app so it
+  can be extracted later if iOS or another Kotlin target becomes real.
 - Keep Android-specific auth redirects, secure storage, and local database wiring
-  behind platform adapters.
-- Do not force shared UI for v1. Compose Multiplatform can be evaluated later if
-  an iOS app becomes a real target, but the first delivery should optimize for a
-  polished Android app.
+  out of the pure review logic.
+- Do not add a Kotlin Multiplatform module for v1. KMP can be evaluated later
+  after the review logic and Android product shape are stable.
 
-Recommended Android/KMP stack:
+Recommended Android stack:
 
 - UI: Jetpack Compose, Material 3, AndroidX Lifecycle ViewModel, and StateFlow.
-- Shared logic: Kotlin Multiplatform `commonMain` for card parsing, question
-  extraction, option generation, weighting, and stats updates.
+- Review logic: pure Kotlin packages for card parsing, question extraction,
+  option generation, weighting, and stats updates.
 - Serialization: `kotlinx.serialization` for Supabase JSON payloads and local
   fixture tests.
 - Network/auth: Supabase Kotlin client with Auth and PostgREST modules. Use PKCE
   OAuth and Android deep-link handling for Google sign-in.
 - HTTP transport: Ktor client through the Supabase Kotlin stack.
-- Local database: Room KMP as the first choice for Android-first development and
-  future multiplatform reach. SQLDelight remains a reasonable alternative if the
-  project later wants SQL-first generated APIs instead of Room entities/DAOs.
+- Local database: Room as the first choice once local stats and cache need a
+  durable store. SQLDelight remains a reasonable alternative if the project later
+  wants SQL-first generated APIs.
 - Secure token storage: Android platform secure storage adapter. Keep Supabase
   refresh/access tokens out of normal preferences and logs.
-- Build location: start with a separate `apps/mobile-android` app plus
-  `shared/review-core`. Fold this into a Gradle workspace only when the first
-  Android skeleton is ready.
+- Build location: start with a separate `mobile` Android project in this
+  repository. Extract a shared `review-core` module only if another platform
+  becomes a concrete target.
 
 Mobile modules:
 
 ```text
-apps/mobile-android/
+mobile/
   app/
-    src/main/java/.../review/
-      ReviewSessionScreen.kt
-      MeaningQuestion.kt
-      ReorderQuestion.kt
-      UsageQuestion.kt
-      InflectionQuestion.kt
-
-shared/review-core/
-  src/commonMain/kotlin/
-    schema/
-      VocabularyCard.kt
-      LexiResultV1.kt
-      JapaneseWordCandidatesResultV1.kt
-    review/
-      QuestionCandidate.kt
-      QuestionKey.kt
-      QuestionExtraction.kt
-      OptionGeneration.kt
-      Weighting.kt
-      StatsUpdate.kt
-    storage/
-      ReviewStore.kt
-      VocabularyRepository.kt
-  src/androidMain/kotlin/
-    storage/
-      AndroidReviewStore.kt
-      AndroidVocabularyCache.kt
-    supabase/
-      AndroidSupabaseClient.kt
+    src/main/java/.../
+      review/
+        QuestionCandidate.kt
+        QuestionKey.kt
+        QuestionExtraction.kt
+        OptionGeneration.kt
+        Weighting.kt
+        StatsUpdate.kt
+      schema/
+        VocabularyCard.kt
+        LexiResultV1.kt
+        JapaneseWordCandidatesResultV1.kt
+      storage/
+        ReviewStore.kt
+        VocabularyRepository.kt
+      ui/
+        ReviewSessionScreen.kt
+        MeaningQuestion.kt
+        ReorderQuestion.kt
+        UsageQuestion.kt
+        InflectionQuestion.kt
 ```
 
 Data flow:
@@ -465,8 +456,8 @@ The mobile UI should stay focused on practice:
 ## Implementation Order
 
 1. Add a static mobile-review fixture from existing card JSON shapes.
-2. Implement shared Kotlin data models for the active card shapes.
-3. Implement question extraction in `commonMain` with deterministic unit tests.
+2. Implement pure Kotlin data models for the active card shapes.
+3. Implement question extraction with deterministic unit tests.
 4. Implement stable `questionKey` generation and prove option changes do not
    change stats identity.
 5. Implement local `question_stats` storage and stats update through an Android

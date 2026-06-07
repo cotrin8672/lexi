@@ -11,3 +11,11 @@ provider-api-keys.json
 provider-settings.json
 **/provider-api-keys.json
 **/provider-settings.json
+
+# Android mobile workspace.
+mobile/.gradle/
+mobile/local.properties
+mobile/**/build/
+mobile/**/.cxx/
+mobile/**/.externalNativeBuild/
+mobile/**/captures/

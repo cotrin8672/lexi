@@ -31,3 +31,30 @@ run = "dotenvx run -- pnpm test"
 description = "Run Rust cargo check with .env loaded via dotenvx"
 run = "dotenvx run -f ../.env -- cargo check"
 dir = "src-tauri"
+
+[tasks.mobile-test]
+description = "Run Lexi Review Android unit tests"
+run = ".\\gradlew.bat :app:testDebugUnitTest"
+dir = "mobile"
+
+[tasks.mobile-build]
+description = "Build the Lexi Review Android debug APK"
+run = ".\\gradlew.bat :app:assembleDebug"
+dir = "mobile"
+
+[tasks.mobile-install]
+description = "Install the Lexi Review Android debug APK on the connected device"
+run = ".\\gradlew.bat :app:installDebug"
+dir = "mobile"
+
+[tasks.mobile-adb-devices]
+description = "List Android devices visible to adb"
+run = "adb devices -l"
+
+[tasks.mobile-adb-pair]
+description = "Pair an Android device for wireless debugging: mise run mobile-adb-pair ip:port"
+run = "adb pair"
+
+[tasks.mobile-adb-connect]
+description = "Connect to a paired Android device for wireless debugging: mise run mobile-adb-connect ip:port"
+run = "adb connect"
