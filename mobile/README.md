@@ -8,7 +8,7 @@ This project is intentionally small:
 - Kotlin + Jetpack Compose + Material 3;
 - no Kotlin Multiplatform module yet;
 - Room-backed local vocabulary/stat storage;
-- read-only Supabase Auth/PostgREST boundaries, with no mobile mutation push;
+- read-only Supabase Auth/PostgREST boundaries through supabase-kt, with no mobile mutation push;
 - no generated-question persistence.
 
 Normal launch loads cached vocabulary for the signed-in account, then refreshes
@@ -58,9 +58,9 @@ SUPABASE_PUBLISHABLE_KEY=your-publishable-key
   compact vocabulary source/count status during review.
 - Cached-first vocabulary loading with honest Supabase refresh errors.
 - Persisted question stats hydrated into session weighting on start.
-- Google sign-in through Supabase PKCE and read-only PostgREST refresh.
+- Google sign-in through supabase-kt Auth with Android deeplink handling and
+  read-only PostgREST refresh.
 
 ## Next Steps
 
-1. Add refresh-token rotation when a stored access token expires.
-2. Optional background refresh after cache hit when online.
+1. Optional background refresh after cache hit when online.

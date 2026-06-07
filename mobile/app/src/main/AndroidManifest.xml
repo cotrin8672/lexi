@@ -41,7 +41,6 @@
 
                 <data
                     android:host="auth"
-                    android:path="/callback"
                     android:scheme="lexireview" />
             </intent-filter>
         </activity>

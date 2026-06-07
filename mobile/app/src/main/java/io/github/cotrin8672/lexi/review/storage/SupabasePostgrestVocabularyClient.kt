@@ -58,7 +58,7 @@ class SupabasePostgrestVocabularyClient(
         val base = config.url.trimEnd('/')
         val connection = URL("$base/$path?$query").openConnection() as HttpURLConnection
         connection.requestMethod = "GET"
-        connection.setRequestProperty("apikey", config.anonKey)
+        connection.setRequestProperty("apikey", config.publishableKey)
         connection.setRequestProperty("Authorization", "Bearer $accessToken")
         connection.setRequestProperty("Accept", "application/json")
         connection.connectTimeout = 15_000

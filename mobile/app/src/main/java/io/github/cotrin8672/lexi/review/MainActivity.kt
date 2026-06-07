@@ -10,9 +10,7 @@ import androidx.compose.ui.Modifier
 import androidx.lifecycle.lifecycleScope
 import io.github.cotrin8672.lexi.review.ui.ReviewSessionScreen
 import io.github.cotrin8672.lexi.review.ui.theme.LexiReviewTheme
-import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.withContext
 
 class MainActivity : ComponentActivity() {
     private lateinit var dependencies: AppDependencies
@@ -39,26 +37,9 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun startGoogleSignIn() {
-        val signInIntent = dependencies.createGoogleSignInIntent()
-        if (signInIntent == null) {
-            Toast.makeText(this, "Supabase is not configured.", Toast.LENGTH_SHORT).show()
-            return
-        }
-        startActivity(signInIntent)
-    }
-
-    private fun handleAuthIntent(intent: Intent?) {
-        val uri = intent?.data ?: return
         lifecycleScope.launch {
-            val status = runCatching {
-                withContext(Dispatchers.IO) {
-                    dependencies.handleAuthCallback(uri)
-                }
-            }
-            status.onSuccess { result ->
-                if (result == AuthCallbackStatus.SignedIn) {
-                    Toast.makeText(this@MainActivity, "Signed in.", Toast.LENGTH_SHORT).show()
-                }
+            runCatching {
+                dependencies.signInWithGoogle()
             }.onFailure { error ->
                 Toast.makeText(
                     this@MainActivity,
@@ -66,6 +47,19 @@ class MainActivity : ComponentActivity() {
                     Toast.LENGTH_LONG,
                 ).show()
             }
+        }
+    }
+
+    private fun handleAuthIntent(intent: Intent?) {
+        intent ?: return
+        runCatching {
+            dependencies.sessionStore?.handleDeeplink(intent)
+        }.onFailure { error ->
+            Toast.makeText(
+                this,
+                error.message ?: "Sign-in callback failed.",
+                Toast.LENGTH_LONG,
+            ).show()
         }
     }
 }
