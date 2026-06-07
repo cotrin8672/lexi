@@ -34,18 +34,15 @@ dir = "src-tauri"
 
 [tasks.mobile-test]
 description = "Run Lexi Review Android unit tests"
-run = ".\\gradlew.bat :app:testDebugUnitTest"
-dir = "mobile"
+run = "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/run-mobile-gradle.ps1 :app:testDebugUnitTest"
 
 [tasks.mobile-build]
 description = "Build the Lexi Review Android debug APK"
-run = ".\\gradlew.bat :app:assembleDebug"
-dir = "mobile"
+run = "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/run-mobile-gradle.ps1 :app:assembleDebug"
 
 [tasks.mobile-install]
 description = "Install the Lexi Review Android debug APK on the connected device"
-run = ".\\gradlew.bat :app:installDebug"
-dir = "mobile"
+run = "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/run-mobile-gradle.ps1 :app:installDebug"
 
 [tasks.mobile-adb-devices]
 description = "List Android devices visible to adb"

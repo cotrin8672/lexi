@@ -31,19 +31,23 @@ From this directory:
 From the repository root:
 
 ```powershell
-rtk powershell -NoProfile -Command "Set-Location mobile; .\gradlew.bat :app:assembleDebug"
+rtk mise run mobile-build
+rtk mise run mobile-test
 ```
 
 ## Supabase configuration
 
-Set non-secret build properties (do not commit real keys):
+Mobile builds read Supabase config from Gradle properties or environment
+variables. The repository-level mise tasks load `.env.secret` and `.env` through
+dotenvx before invoking Gradle.
 
 ```properties
 LEXI_SUPABASE_URL=https://your-project.supabase.co
-LEXI_SUPABASE_ANON_KEY=your-anon-key
+SUPABASE_PUBLISHABLE_KEY=your-publishable-key
 ```
 
-`SUPABASE_PUBLISHABLE_KEY` is accepted as an alias for the anon key.
+`LEXI_SUPABASE_PUBLISHABLE_KEY`, `LEXI_SUPABASE_ANON_KEY`, and
+`SUPABASE_ANON_KEY` are accepted as compatibility aliases.
 
 ## Implemented
 

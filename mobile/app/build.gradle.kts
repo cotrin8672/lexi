@@ -17,6 +17,12 @@
 
 import org.jetbrains.kotlin.gradle.dsl.JvmTarget
 
+fun configValue(vararg names: String): String =
+    names.firstNotNullOfOrNull { name ->
+        (project.findProperty(name) as String?)?.trim()?.takeIf { it.isNotBlank() }
+            ?: System.getenv(name)?.trim()?.takeIf { it.isNotBlank() }
+    }.orEmpty()
+
 plugins {
     alias(libs.plugins.android.application)
     alias(libs.plugins.kotlin.compose)
@@ -35,13 +41,15 @@ android {
         versionCode = 1
         versionName = "1.0"
 
-        val supabaseUrl = (project.findProperty("LEXI_SUPABASE_URL") as String?)?.trim().orEmpty()
-        val supabaseAnonKey = (
-            project.findProperty("LEXI_SUPABASE_ANON_KEY")
-                ?: project.findProperty("SUPABASE_PUBLISHABLE_KEY")
-            ) as String?
+        val supabaseUrl = configValue("LEXI_SUPABASE_URL", "SUPABASE_URL")
+        val supabasePublishableKey = configValue(
+            "SUPABASE_PUBLISHABLE_KEY",
+            "LEXI_SUPABASE_PUBLISHABLE_KEY",
+            "LEXI_SUPABASE_ANON_KEY",
+            "SUPABASE_ANON_KEY",
+        )
         buildConfigField("String", "SUPABASE_URL", "\"$supabaseUrl\"")
-        buildConfigField("String", "SUPABASE_ANON_KEY", "\"${supabaseAnonKey?.trim().orEmpty()}\"")
+        buildConfigField("String", "SUPABASE_ANON_KEY", "\"$supabasePublishableKey\"")
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         vectorDrawables {

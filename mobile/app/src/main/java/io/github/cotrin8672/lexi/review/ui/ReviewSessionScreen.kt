@@ -72,7 +72,6 @@ fun ReviewSessionScreen(
     ReviewSessionContent(
         modifier = modifier,
         uiState = uiState,
-        supabaseConfigured = dependencies.supabaseConfigured,
         onSelectMode = viewModel::startSession,
         onOpenVocabularyList = viewModel::loadVocabularyList,
         onSignIn = onSignIn,
@@ -90,7 +89,6 @@ fun ReviewSessionScreen(
 @Composable
 private fun ReviewSessionContent(
     uiState: ReviewUiState,
-    supabaseConfigured: Boolean,
     onSelectMode: (ReviewMode) -> Unit,
     onOpenVocabularyList: () -> Unit,
     onSignIn: () -> Unit,
@@ -113,7 +111,6 @@ private fun ReviewSessionContent(
                 onSelectMode = onSelectMode,
                 onOpenVocabularyList = onOpenVocabularyList,
                 onSignIn = onSignIn,
-                supabaseConfigured = supabaseConfigured,
                 modifier = Modifier.fillMaxSize(),
             )
             SessionLoadPhase.LOADING -> LoadingState(modifier = Modifier.fillMaxSize())
@@ -147,7 +144,6 @@ private fun ModeSelectState(
     onSelectMode: (ReviewMode) -> Unit,
     onOpenVocabularyList: () -> Unit,
     onSignIn: () -> Unit,
-    supabaseConfigured: Boolean,
     modifier: Modifier = Modifier,
 ) {
     Box(
@@ -189,14 +185,12 @@ private fun ModeSelectState(
             ) {
                 Text("Word list")
             }
-            if (supabaseConfigured) {
-                Spacer(modifier = Modifier.height(8.dp))
-                OutlinedButton(
-                    modifier = Modifier.fillMaxWidth(),
-                    onClick = onSignIn,
-                ) {
-                    Text("Sign in with Google")
-                }
+            Spacer(modifier = Modifier.height(8.dp))
+            OutlinedButton(
+                modifier = Modifier.fillMaxWidth(),
+                onClick = onSignIn,
+            ) {
+                Text("Sign in with Google")
             }
         }
     }
@@ -616,7 +610,6 @@ private fun ReviewSessionPreview() {
             onSelectMode = {},
             onOpenVocabularyList = {},
             onSignIn = {},
-            supabaseConfigured = true,
             onSubmitOption = {},
             onAddReorderToken = {},
             onRemoveReorderToken = {},
