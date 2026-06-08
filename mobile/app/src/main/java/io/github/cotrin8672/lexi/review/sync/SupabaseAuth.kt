@@ -1,21 +1,17 @@
 package io.github.cotrin8672.lexi.review.sync
 
-import android.content.Intent
 import io.github.jan.supabase.SupabaseClient
 import io.github.jan.supabase.auth.Auth
-import io.github.jan.supabase.auth.ExternalAuthAction
-import io.github.jan.supabase.auth.FlowType
 import io.github.jan.supabase.auth.auth
-import io.github.jan.supabase.auth.handleDeeplinks
-import io.github.jan.supabase.auth.providers.Google
+import io.github.jan.supabase.compose.auth.ComposeAuth
+import io.github.jan.supabase.compose.auth.googleNativeLogin
 import io.github.jan.supabase.createSupabaseClient
 import io.github.jan.supabase.postgrest.Postgrest
 
 data class SupabaseMobileConfig(
     val url: String,
     val publishableKey: String,
-    val deeplinkScheme: String = "lexireview",
-    val deeplinkHost: String = "auth",
+    val googleWebClientId: String = "",
 )
 
 data class SupabaseSession(
@@ -26,7 +22,8 @@ data class SupabaseSession(
 )
 
 class SupabaseSessionStore(
-    private val client: SupabaseClient,
+    val client: SupabaseClient,
+    val nativeGoogleSignInEnabled: Boolean,
 ) {
     fun readUserId(): String? =
         client.auth.currentUserOrNull()?.id
@@ -42,27 +39,25 @@ class SupabaseSessionStore(
         )
     }
 
-    suspend fun signInWithGoogle() {
-        client.auth.signInWith(Google)
-    }
-
-    fun handleDeeplink(intent: Intent) {
-        client.handleDeeplinks(intent)
-    }
-
     companion object {
-        fun createClient(config: SupabaseMobileConfig): SupabaseClient =
-            createSupabaseClient(
+        fun createClient(config: SupabaseMobileConfig): SupabaseSessionStore {
+            val nativeGoogleSignInEnabled = config.googleWebClientId.isNotBlank()
+            val client = createSupabaseClient(
                 supabaseUrl = config.url,
                 supabaseKey = config.publishableKey,
             ) {
-                install(Auth) {
-                    scheme = config.deeplinkScheme
-                    host = config.deeplinkHost
-                    flowType = FlowType.PKCE
-                    defaultExternalAuthAction = ExternalAuthAction.CustomTabs()
+                install(Auth)
+                if (nativeGoogleSignInEnabled) {
+                    install(ComposeAuth) {
+                        googleNativeLogin(serverClientId = config.googleWebClientId)
+                    }
                 }
                 install(Postgrest)
             }
+            return SupabaseSessionStore(
+                client = client,
+                nativeGoogleSignInEnabled = nativeGoogleSignInEnabled,
+            )
+        }
     }
 }

@@ -20,8 +20,59 @@ interface VocabularyCacheDao {
     @Query("SELECT * FROM cached_lexeme_forms WHERE userId = :userId")
     suspend fun getForms(userId: String): List<CachedLexemeFormEntity>
 
+    @Query(
+        """
+        SELECT EXISTS(
+            SELECT 1 FROM cached_card_snapshots
+            WHERE userId = :userId
+              AND remoteOperationId = :operationId
+              AND remoteServerRevision = :serverRevision
+        )
+        """,
+    )
+    suspend fun hasAppliedPullChange(
+        userId: String,
+        operationId: String,
+        serverRevision: Long,
+    ): Boolean
+
+    @Query(
+        """
+        UPDATE cached_card_snapshots
+        SET active = 0
+        WHERE userId = :userId AND lexemeId = :lexemeId AND resultLanguage = :resultLanguage
+        """,
+    )
+    suspend fun deactivateSnapshots(
+        userId: String,
+        lexemeId: String,
+        resultLanguage: String,
+    )
+
+    @Query(
+        """
+        SELECT id FROM cached_user_lexemes
+        WHERE userId = :userId AND language = :language AND canonicalKey = :canonicalKey
+        LIMIT 1
+        """,
+    )
+    suspend fun findLexemeId(
+        userId: String,
+        language: String,
+        canonicalKey: String,
+    ): String?
+
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun upsertLexemes(rows: List<CachedUserLexemeEntity>)
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun upsertLexeme(row: CachedUserLexemeEntity)
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun upsertSnapshot(row: CachedCardSnapshotEntity)
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun upsertForm(row: CachedLexemeFormEntity)
 
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun upsertSnapshots(rows: List<CachedCardSnapshotEntity>)

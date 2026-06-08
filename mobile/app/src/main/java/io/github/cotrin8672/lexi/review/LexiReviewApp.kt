@@ -9,5 +9,11 @@ class LexiReviewApp : Application() {
     override fun onCreate() {
         super.onCreate()
         dependencies = AppDependencies.create(this)
+        dependencies.warmUpVocabularyCache()
+    }
+
+    override fun onTerminate() {
+        dependencies.shutdown()
+        super.onTerminate()
     }
 }

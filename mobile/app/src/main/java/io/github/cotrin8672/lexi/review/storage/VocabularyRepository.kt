@@ -2,6 +2,7 @@ package io.github.cotrin8672.lexi.review.storage
 
 import io.github.cotrin8672.lexi.review.fixtures.ReviewFixtures
 import io.github.cotrin8672.lexi.review.schema.ActiveVocabularyCard
+import io.github.cotrin8672.lexi.review.sync.VocabularyReplicaSync
 import io.github.cotrin8672.lexi.review.schema.VocabularyBundle
 import io.github.cotrin8672.lexi.review.storage.dao.VocabularyCacheDao
 import kotlinx.coroutines.CoroutineDispatcher
@@ -46,7 +47,7 @@ object FixtureVocabularyRepository : VocabularyRepository {
 
 class DefaultVocabularyRepository(
     private val cacheDao: VocabularyCacheDao,
-    private val supabaseClient: SupabaseVocabularyClient,
+    private val syncEngine: VocabularyReplicaSync?,
     private val ioDispatcher: CoroutineDispatcher = Dispatchers.IO,
 ) : VocabularyRepository {
     override suspend fun loadFixtureCards(): VocabularyLoadResult = withContext(ioDispatcher) {
@@ -58,37 +59,43 @@ class DefaultVocabularyRepository(
 
     override suspend fun loadCachedCards(userId: String): VocabularyLoadResult =
         withContext(ioDispatcher) {
-            val lexemes = cacheDao.getLexemes(userId)
-            val snapshots = cacheDao.getActiveSnapshots(userId)
-            val forms = cacheDao.getForms(userId)
-            if (lexemes.isEmpty() || snapshots.isEmpty()) {
-                return@withContext VocabularyLoadResult.Failure("No cached vocabulary for user")
+            try {
+                val lexemes = cacheDao.getLexemes(userId)
+                val snapshots = cacheDao.getActiveSnapshots(userId)
+                val forms = cacheDao.getForms(userId)
+                if (lexemes.isEmpty() || snapshots.isEmpty()) {
+                    return@withContext VocabularyLoadResult.Failure("No cached vocabulary for user")
+                }
+                val bundle = VocabularyBundle(
+                    lexemes = lexemes.map { it.toDomain() },
+                    snapshots = snapshots.map { it.toDomain() },
+                    forms = forms.map { it.toDomain() },
+                )
+                VocabularyLoadResult.Success(
+                    cards = bundle.activeCards(),
+                    source = VocabularySource.LOCAL_CACHE,
+                )
+            } catch (error: Exception) {
+                VocabularyLoadResult.Failure(
+                    error.message ?: "Failed to load cached vocabulary",
+                )
             }
-            val bundle = VocabularyBundle(
-                lexemes = lexemes.map { it.toDomain() },
-                snapshots = snapshots.map { it.toDomain() },
-                forms = forms.map { it.toDomain() },
-            )
-            VocabularyLoadResult.Success(
-                cards = bundle.activeCards(),
-                source = VocabularySource.LOCAL_CACHE,
-            )
         }
 
     override suspend fun refreshFromSupabase(userId: String): VocabularyLoadResult =
         withContext(ioDispatcher) {
-            val remote = supabaseClient.fetchActiveVocabulary(userId)
-            val updatedAt = remote.snapshots.firstOrNull()?.createdAt ?: ReviewFixtures.FIXTURE_TIMESTAMP
-            val entities = remote.toCacheEntities(updatedAt)
-            cacheDao.replaceUserCache(
-                userId = userId,
-                lexemes = entities.lexemes,
-                snapshots = entities.snapshots,
-                forms = entities.forms,
-            )
-            VocabularyLoadResult.Success(
-                cards = remote.activeCards(),
-                source = VocabularySource.SUPABASE_REFRESH,
-            )
+            try {
+                val engine = syncEngine
+                    ?: return@withContext VocabularyLoadResult.Failure("Supabase sync is not configured")
+                engine.sync(userId)
+                when (val cached = loadCachedCards(userId)) {
+                    is VocabularyLoadResult.Success -> cached.copy(source = VocabularySource.SUPABASE_REFRESH)
+                    is VocabularyLoadResult.Failure -> cached
+                }
+            } catch (error: Exception) {
+                VocabularyLoadResult.Failure(
+                    error.message ?: "Supabase vocabulary sync failed",
+                )
+            }
         }
 }

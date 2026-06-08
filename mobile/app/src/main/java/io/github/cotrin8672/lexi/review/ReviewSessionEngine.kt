@@ -69,6 +69,17 @@ class ReviewSessionEngine(
         return advanceToNextQuestion()
     }
 
+    fun updateInflectionAnswer(answerText: String): ReviewUiState {
+        if (_state.interactionPhase != QuestionInteractionPhase.ANSWERING) {
+            return _state
+        }
+        if (_state.currentQuestion !is RenderedQuestion.Inflection) {
+            return _state
+        }
+        _state = _state.copy(inflectionAnswerText = answerText)
+        return _state
+    }
+
     fun selectOption(answerKey: String): ReviewUiState {
         if (_state.interactionPhase != QuestionInteractionPhase.ANSWERING) {
             return _state
@@ -84,7 +95,6 @@ class ReviewSessionEngine(
         return when (_state.currentQuestion) {
             is RenderedQuestion.Meaning,
             is RenderedQuestion.Usage,
-            is RenderedQuestion.Inflection,
             -> {
                 if (_state.selectedOptionKey == answerKey) {
                     checkAnswer()
@@ -93,6 +103,7 @@ class ReviewSessionEngine(
                     _state
                 }
             }
+            is RenderedQuestion.Inflection -> _state
             is RenderedQuestion.Reorder,
             null,
             -> _state
@@ -194,6 +205,7 @@ class ReviewSessionEngine(
             interactionPhase = QuestionInteractionPhase.ANSWERING,
             currentQuestion = rendered,
             selectedOptionKey = null,
+            inflectionAnswerText = "",
             reorderBankOrder = when (rendered) {
                 is RenderedQuestion.Reorder -> rendered.bankOrder
                 else -> emptyList()
@@ -258,11 +270,10 @@ class ReviewSessionEngine(
             }
             QuestionType.INFLECTION -> {
                 val payload = candidate.payload as? QuestionPayload.Inflection ?: return null
-                val options = generateInflectionOptions(candidate, cards, questionRandom) ?: return null
                 RenderedQuestion.Inflection(
                     candidate = candidate,
                     primaryText = inflectionPrimaryText(payload),
-                    options = options,
+                    expectedForm = payload.formText,
                 )
             }
         }
@@ -272,15 +283,23 @@ class ReviewSessionEngine(
         return when (val question = _state.currentQuestion) {
             is RenderedQuestion.Meaning,
             is RenderedQuestion.Usage,
-            is RenderedQuestion.Inflection,
             -> {
                 val selectedKey = _state.selectedOptionKey ?: return null
                 val options = when (question) {
                     is RenderedQuestion.Meaning -> question.options
                     is RenderedQuestion.Usage -> question.options
-                    is RenderedQuestion.Inflection -> question.options
+                    is RenderedQuestion.Inflection,
+                    is RenderedQuestion.Reorder,
+                    -> return null
                 }
                 options.firstOrNull { it.answerKey == selectedKey }?.isCorrect == true
+            }
+            is RenderedQuestion.Inflection -> {
+                val payload = candidate.payload as? QuestionPayload.Inflection ?: return null
+                if (_state.inflectionAnswerText.isBlank()) {
+                    return null
+                }
+                isInflectionAnswerCorrect(payload, _state.inflectionAnswerText)
             }
             is RenderedQuestion.Reorder -> {
                 if (_state.reorderAvailableTokens().isNotEmpty()) {

@@ -48,8 +48,15 @@ android {
             "LEXI_SUPABASE_ANON_KEY",
             "SUPABASE_ANON_KEY",
         )
+        val googleWebClientId = configValue(
+            "LEXI_GOOGLE_WEB_CLIENT_ID",
+            "GOOGLE_WEB_CLIENT_ID",
+            "LEXI_GOOGLE_CLIENT_ID",
+            "GOOGLE_CLIENT_ID",
+        )
         buildConfigField("String", "SUPABASE_URL", "\"$supabaseUrl\"")
         buildConfigField("String", "SUPABASE_ANON_KEY", "\"$supabasePublishableKey\"")
+        buildConfigField("String", "GOOGLE_WEB_CLIENT_ID", "\"$googleWebClientId\"")
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         vectorDrawables {
@@ -105,6 +112,7 @@ dependencies {
     implementation(libs.androidx.room.ktx)
     implementation(platform(libs.supabase.bom))
     implementation(libs.supabase.auth)
+    implementation(libs.supabase.compose.auth)
     implementation(libs.supabase.postgrest)
     implementation(libs.ktor.client.android)
     ksp(libs.androidx.room.compiler)

@@ -171,7 +171,7 @@ private fun extractInflectionCandidates(cards: List<ActiveVocabularyCard>): List
         }
 
         for (form in card.forms) {
-            if (form.relation !in IRREGULAR_RELATIONS) {
+            if (form.relation != IRREGULAR_RELATION) {
                 continue
             }
             if (normalizeEnglish(form.formText) == normalizeEnglish(headword)) {
@@ -181,11 +181,15 @@ private fun extractInflectionCandidates(cards: List<ActiveVocabularyCard>): List
                 formText = form.formText,
                 relation = form.relation,
                 formKey = form.formKey,
-                priority = if (form.relation == "irregular") 0 else 1,
+                priority = 0,
             )
         }
 
-        for (point in inflectionPoints.distinctBy { it.formKey to it.relation }) {
+        for (point in inflectionPoints
+            .groupBy { it.formKey }
+            .values
+            .map { points -> points.minBy { inflectionRelationPriority(it.relation) } }
+        ) {
             val key = QuestionKey.inflection(card.lexemeId, point.relation, point.formKey)
             candidates += QuestionCandidate(
                 questionKey = key,
@@ -206,7 +210,7 @@ private fun extractInflectionCandidates(cards: List<ActiveVocabularyCard>): List
     return candidates
 }
 
-private val IRREGULAR_RELATIONS = setOf("irregular", "regular")
+private const val IRREGULAR_RELATION = "irregular"
 
 private data class InflectionPoint(
     val formText: String,
@@ -214,6 +218,13 @@ private data class InflectionPoint(
     val formKey: String,
     val priority: Int,
 )
+
+private fun inflectionRelationPriority(relation: String): Int =
+    when (relation.lowercase()) {
+        "past", "pastparticiple", "past_participle", "plural" -> 0
+        "irregular" -> 1
+        else -> 2
+    }
 
 fun shouldSkipInflectionForm(headword: String, formText: String): Boolean =
     normalizeEnglish(formText) == normalizeEnglish(headword)

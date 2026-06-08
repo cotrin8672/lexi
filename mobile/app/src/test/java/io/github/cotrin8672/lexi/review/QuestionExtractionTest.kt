@@ -66,4 +66,16 @@ class QuestionExtractionTest {
         assertTrue(shouldSkipInflectionForm("go", "go"))
         assertFalse(shouldSkipInflectionForm("go", "went"))
     }
+
+    @Test
+    fun inflectionCandidatesUseIrregularFormsOnly() {
+        val candidates = extractQuestionCandidates(cards)
+            .filter { it.questionType == QuestionType.INFLECTION }
+
+        assertTrue(candidates.isNotEmpty())
+        candidates.forEach { candidate ->
+            val payload = candidate.payload as QuestionPayload.Inflection
+            assertTrue(payload.relation == "past" || payload.relation == "irregular")
+        }
+    }
 }

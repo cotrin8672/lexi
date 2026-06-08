@@ -107,57 +107,11 @@ fun inflectionPrompt(payload: QuestionPayload.Inflection): String =
             "Which form is \"${payload.formText}\"?"
     }
 
-fun generateInflectionOptions(
-    candidate: QuestionCandidate,
-    cards: List<ActiveVocabularyCard>,
-    random: Random = Random.Default,
-): List<MeaningOption>? {
-    val payload = candidate.payload as? QuestionPayload.Inflection ?: return null
-    val normalizedCorrect = normalizeEnglish(payload.formText)
-    val formPool = buildList {
-        cards.forEach { card ->
-            card.content.inflections.forEach { inflection ->
-                add(inflection.form)
-            }
-            card.forms.forEach { form ->
-                if (form.relation != "canonical") {
-                    add(form.formText)
-                }
-            }
-        }
-    }
-        .filter { normalizeEnglish(it) != normalizedCorrect }
-        .map { normalizeEnglish(it) to it }
-        .distinctBy { it.first }
-        .map { it.second }
-
-    val headwordPool = cards
-        .filter { it.lexemeId != candidate.lexemeId }
-        .map { it.content.headword }
-        .filter { normalizeEnglish(it) != normalizedCorrect }
-        .distinctBy { normalizeEnglish(it) }
-
-    val pool = (formPool + headwordPool)
-        .distinctBy { normalizeEnglish(it) }
-        .filter { normalizeEnglish(it) != normalizeEnglish(payload.headword) }
-
-    if (pool.size < 3) {
-        return null
-    }
-    val distractors = pool.shuffled(random).take(3).map { term ->
-        MeaningOption(
-            answerKey = normalizeEnglish(term),
-            label = term,
-            isCorrect = false,
-        )
-    }
-    val correct = MeaningOption(
-        answerKey = normalizedCorrect,
-        label = payload.formText,
-        isCorrect = true,
-    )
-    return (distractors + correct).shuffled(random)
-}
+fun isInflectionAnswerCorrect(
+    payload: QuestionPayload.Inflection,
+    submittedAnswer: String,
+): Boolean =
+    normalizeEnglish(submittedAnswer) == normalizeEnglish(payload.formText)
 
 fun generateUsageOptions(
     candidate: QuestionCandidate,

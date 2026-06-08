@@ -11,7 +11,7 @@ import org.junit.Test
 
 class VocabularySessionLoaderTest {
     @Test
-    fun returnsCachedVocabularyBeforeSupabaseRefresh() = runBlocking {
+    fun returnsCachedVocabularyWithoutSupabaseRefresh() = runBlocking {
         val cards = ReviewFixtures.vocabularyBundle().activeCards()
         val repository = FakeVocabularyRepository(
             cached = VocabularyLoadResult.Success(cards, VocabularySource.LOCAL_CACHE),
@@ -21,7 +21,6 @@ class VocabularySessionLoaderTest {
         val result = loadSessionVocabulary(
             repository = repository,
             userId = ReviewFixtures.USER_ID,
-            canRefreshFromSupabase = true,
         )
 
         assertTrue(result is VocabularyLoadResult.Success)
@@ -30,7 +29,7 @@ class VocabularySessionLoaderTest {
     }
 
     @Test
-    fun refreshesFromSupabaseWhenCacheIsEmpty() = runBlocking {
+    fun failsWhenCacheIsEmptyWithoutBlockingRefresh() = runBlocking {
         val cards = ReviewFixtures.vocabularyBundle().activeCards()
         val repository = FakeVocabularyRepository(
             cached = VocabularyLoadResult.Failure("No cached vocabulary for user"),
@@ -40,35 +39,15 @@ class VocabularySessionLoaderTest {
         val result = loadSessionVocabulary(
             repository = repository,
             userId = ReviewFixtures.USER_ID,
-            canRefreshFromSupabase = true,
-        )
-
-        assertTrue(result is VocabularyLoadResult.Success)
-        assertEquals(VocabularySource.SUPABASE_REFRESH, (result as VocabularyLoadResult.Success).source)
-        assertEquals(1, repository.refreshCalls)
-    }
-
-    @Test
-    fun surfacesSupabaseFailureWhenCacheIsEmpty() = runBlocking {
-        val repository = FakeVocabularyRepository(
-            cached = VocabularyLoadResult.Failure("No cached vocabulary for user"),
-            refresh = VocabularyLoadResult.Failure("HTTP 401"),
-        )
-
-        val result = loadSessionVocabulary(
-            repository = repository,
-            userId = ReviewFixtures.USER_ID,
-            canRefreshFromSupabase = true,
         )
 
         assertTrue(result is VocabularyLoadResult.Failure)
-        val message = (result as VocabularyLoadResult.Failure).message
-        assertTrue(message.contains("Supabase sync failed"))
-        assertTrue(message.contains("HTTP 401"))
+        assertEquals("No cached vocabulary for user", (result as VocabularyLoadResult.Failure).message)
+        assertEquals(0, repository.refreshCalls)
     }
 
     @Test
-    fun failsWhenNoUserAndRefreshUnavailable() = runBlocking {
+    fun failsWhenNoUser() = runBlocking {
         val repository = FakeVocabularyRepository(
             cached = VocabularyLoadResult.Failure("No cached vocabulary for user"),
             refresh = VocabularyLoadResult.Failure("not configured"),
@@ -77,7 +56,6 @@ class VocabularySessionLoaderTest {
         val result = loadSessionVocabulary(
             repository = repository,
             userId = null,
-            canRefreshFromSupabase = false,
         )
 
         assertTrue(result is VocabularyLoadResult.Failure)

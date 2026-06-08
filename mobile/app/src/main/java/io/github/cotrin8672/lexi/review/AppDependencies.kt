@@ -6,19 +6,30 @@ import io.github.cotrin8672.lexi.review.storage.DefaultVocabularyRepository
 import io.github.cotrin8672.lexi.review.storage.LexiReviewDatabase
 import io.github.cotrin8672.lexi.review.storage.ReviewStore
 import io.github.cotrin8672.lexi.review.storage.RoomReviewStore
-import io.github.cotrin8672.lexi.review.storage.SupabasePostgrestVocabularyClient
-import io.github.cotrin8672.lexi.review.storage.SupabaseVocabularyClient
-import io.github.cotrin8672.lexi.review.storage.UnconfiguredSupabaseVocabularyClient
 import io.github.cotrin8672.lexi.review.storage.VocabularyRepository
+import io.github.cotrin8672.lexi.review.speech.AndroidWordSpeech
+import io.github.cotrin8672.lexi.review.speech.WordSpeech
 import io.github.cotrin8672.lexi.review.sync.SupabaseMobileConfig
 import io.github.cotrin8672.lexi.review.sync.SupabaseSessionStore
+import io.github.cotrin8672.lexi.review.sync.VocabularyReplicaSync
+import io.github.cotrin8672.lexi.review.sync.VocabularySyncCoordinator
+import io.github.cotrin8672.lexi.review.sync.VocabularySyncEngine
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
 
 class AppDependencies(
     val vocabularyRepository: VocabularyRepository,
     val reviewStore: ReviewStore,
     val sessionStore: SupabaseSessionStore?,
     val supabaseConfigured: Boolean,
+    val wordSpeech: WordSpeech,
+    val vocabularySyncCoordinator: VocabularySyncCoordinator?,
+    private val wordSpeechLifecycle: AndroidWordSpeech? = null,
 ) {
+    fun shutdown() {
+        wordSpeechLifecycle?.shutdown()
+    }
     fun activeUserId(): String? = sessionStore?.readUserId()
 
     fun isSignedIn(): Boolean = !activeUserId().isNullOrBlank()
@@ -26,9 +37,12 @@ class AppDependencies(
     fun canRefreshFromSupabase(): Boolean =
         supabaseConfigured && !sessionStore?.read()?.accessToken.isNullOrBlank()
 
-    suspend fun signInWithGoogle() {
-        val store = sessionStore ?: error("Supabase is not configured.")
-        store.signInWithGoogle()
+    fun warmUpVocabularyCache() {
+        val userId = activeUserId()?.takeIf { it.isNotBlank() } ?: return
+        vocabularySyncCoordinator?.probeCache(userId)
+        if (canRefreshFromSupabase()) {
+            vocabularySyncCoordinator?.scheduleSync(userId)
+        }
     }
 
     companion object {
@@ -38,33 +52,59 @@ class AppDependencies(
                 appContext,
                 LexiReviewDatabase::class.java,
                 "lexi_review.db",
-            ).build()
+            )
+                .fallbackToDestructiveMigration()
+                .build()
             val supabaseConfigured = isSupabaseConfigured()
             val sessionStore = createSessionStore(supabaseConfigured)
-            val supabaseClient = createSupabaseClient(sessionStore, supabaseConfigured)
+            val syncEngine = createSyncEngine(
+                database = database,
+                sessionStore = sessionStore,
+                configured = supabaseConfigured,
+            )
+            val wordSpeech = AndroidWordSpeech(appContext)
+            val vocabularyRepository = DefaultVocabularyRepository(
+                cacheDao = database.vocabularyCacheDao(),
+                syncEngine = syncEngine,
+            )
+            val appScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+            val vocabularySyncCoordinator = if (syncEngine != null) {
+                VocabularySyncCoordinator(
+                    repository = vocabularyRepository,
+                    scope = appScope,
+                    canSync = {
+                        supabaseConfigured && !sessionStore?.read()?.accessToken.isNullOrBlank()
+                    },
+                )
+            } else {
+                null
+            }
             return AppDependencies(
-                vocabularyRepository = DefaultVocabularyRepository(
-                    cacheDao = database.vocabularyCacheDao(),
-                    supabaseClient = supabaseClient,
-                ),
+                vocabularyRepository = vocabularyRepository,
                 reviewStore = RoomReviewStore(database.questionStatsDao()),
                 sessionStore = sessionStore,
                 supabaseConfigured = supabaseConfigured,
+                wordSpeech = wordSpeech,
+                vocabularySyncCoordinator = vocabularySyncCoordinator,
+                wordSpeechLifecycle = wordSpeech,
             )
         }
 
         private fun isSupabaseConfigured(): Boolean =
             BuildConfig.SUPABASE_URL.isNotBlank() && BuildConfig.SUPABASE_ANON_KEY.isNotBlank()
 
-        private fun createSupabaseClient(
+        private fun createSyncEngine(
+            database: LexiReviewDatabase,
             sessionStore: SupabaseSessionStore?,
             configured: Boolean,
-        ): SupabaseVocabularyClient {
+        ): VocabularyReplicaSync? {
             if (!configured || sessionStore == null) {
-                return UnconfiguredSupabaseVocabularyClient()
+                return null
             }
-            return SupabasePostgrestVocabularyClient(
+            return VocabularySyncEngine(
                 config = mobileConfig(),
+                cacheDao = database.vocabularyCacheDao(),
+                syncStateDao = database.vocabularySyncStateDao(),
                 sessionProvider = { sessionStore.read() },
             )
         }
@@ -75,15 +115,14 @@ class AppDependencies(
             if (!configured) {
                 return null
             }
-            return SupabaseSessionStore(
-                SupabaseSessionStore.createClient(mobileConfig()),
-            )
+            return SupabaseSessionStore.createClient(mobileConfig())
         }
 
         private fun mobileConfig(): SupabaseMobileConfig =
             SupabaseMobileConfig(
                 url = BuildConfig.SUPABASE_URL,
                 publishableKey = BuildConfig.SUPABASE_ANON_KEY,
+                googleWebClientId = BuildConfig.GOOGLE_WEB_CLIENT_ID,
             )
     }
 }

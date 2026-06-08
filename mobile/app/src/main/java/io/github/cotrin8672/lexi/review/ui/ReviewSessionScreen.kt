@@ -42,6 +42,7 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import io.github.cotrin8672.lexi.review.AppDependencies
+import io.github.cotrin8672.lexi.review.sync.SupabaseSessionStore
 import io.github.cotrin8672.lexi.review.MeaningOption
 import io.github.cotrin8672.lexi.review.QuestionCandidate
 import io.github.cotrin8672.lexi.review.QuestionPayload
@@ -62,7 +63,6 @@ private const val CORRECT_AUTO_ADVANCE_MS = 2500L
 @Composable
 fun ReviewSessionScreen(
     dependencies: AppDependencies,
-    onSignIn: () -> Unit,
     modifier: Modifier = Modifier,
     viewModel: ReviewViewModel = viewModel(
         factory = ReviewViewModel.factory(dependencies),
@@ -72,10 +72,11 @@ fun ReviewSessionScreen(
     ReviewSessionContent(
         modifier = modifier,
         uiState = uiState,
+        sessionStore = dependencies.sessionStore,
         onSelectMode = viewModel::startSession,
         onOpenVocabularyList = viewModel::loadVocabularyList,
-        onSignIn = onSignIn,
         onSubmitOption = viewModel::submitOption,
+        onInflectionAnswerChange = viewModel::updateInflectionAnswer,
         onAddReorderToken = viewModel::addReorderToken,
         onRemoveReorderToken = viewModel::removeReorderToken,
         onCheck = viewModel::checkAnswer,
@@ -83,16 +84,18 @@ fun ReviewSessionScreen(
         onNext = viewModel::nextQuestion,
         onRetryLoad = viewModel::retryLastLoad,
         onReturnToModeSelect = viewModel::returnToModeSelect,
+        onSignedIn = viewModel::onSignedIn,
     )
 }
 
 @Composable
 private fun ReviewSessionContent(
     uiState: ReviewUiState,
+    sessionStore: SupabaseSessionStore?,
     onSelectMode: (ReviewMode) -> Unit,
     onOpenVocabularyList: () -> Unit,
-    onSignIn: () -> Unit,
     onSubmitOption: (String) -> Unit,
+    onInflectionAnswerChange: (String) -> Unit,
     onAddReorderToken: (Int) -> Unit,
     onRemoveReorderToken: (Int) -> Unit,
     onCheck: () -> Unit,
@@ -100,6 +103,7 @@ private fun ReviewSessionContent(
     onNext: () -> Unit,
     onRetryLoad: () -> Unit,
     onReturnToModeSelect: () -> Unit,
+    onSignedIn: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     Surface(
@@ -108,12 +112,18 @@ private fun ReviewSessionContent(
     ) {
         when (uiState.loadPhase) {
             SessionLoadPhase.MODE_SELECT -> ModeSelectState(
+                uiState = uiState,
+                sessionStore = sessionStore,
                 onSelectMode = onSelectMode,
                 onOpenVocabularyList = onOpenVocabularyList,
-                onSignIn = onSignIn,
+                onSignedIn = onSignedIn,
                 modifier = Modifier.fillMaxSize(),
             )
-            SessionLoadPhase.LOADING -> LoadingState(modifier = Modifier.fillMaxSize())
+            SessionLoadPhase.SYNCING_VOCABULARY -> SyncingVocabularyState(
+                reviewMode = uiState.reviewMode,
+                onBack = onReturnToModeSelect,
+                modifier = Modifier.fillMaxSize(),
+            )
             SessionLoadPhase.ERROR -> ErrorState(
                 message = uiState.errorMessage ?: "Could not start review.",
                 onRetry = onRetryLoad,
@@ -128,6 +138,7 @@ private fun ReviewSessionContent(
             SessionLoadPhase.READY -> ReadyState(
                 uiState = uiState,
                 onSubmitOption = onSubmitOption,
+                onInflectionAnswerChange = onInflectionAnswerChange,
                 onAddReorderToken = onAddReorderToken,
                 onRemoveReorderToken = onRemoveReorderToken,
                 onCheck = onCheck,
@@ -141,11 +152,17 @@ private fun ReviewSessionContent(
 
 @Composable
 private fun ModeSelectState(
+    uiState: ReviewUiState,
+    sessionStore: SupabaseSessionStore?,
     onSelectMode: (ReviewMode) -> Unit,
     onOpenVocabularyList: () -> Unit,
-    onSignIn: () -> Unit,
+    onSignedIn: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
+    var isSignedIn by remember(sessionStore) {
+        mutableStateOf(!sessionStore?.readUserId().isNullOrBlank())
+    }
+
     Box(
         modifier = modifier.padding(horizontal = 24.dp),
         contentAlignment = Alignment.Center,
@@ -167,6 +184,23 @@ private fun ModeSelectState(
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 textAlign = TextAlign.Center,
             )
+            if (uiState.vocabularySyncInProgress) {
+                Spacer(modifier = Modifier.height(8.dp))
+                Text(
+                    text = "Updating vocabulary in background…",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    textAlign = TextAlign.Center,
+                )
+            } else if (uiState.vocabularyCacheReady) {
+                Spacer(modifier = Modifier.height(8.dp))
+                Text(
+                    text = "Vocabulary ready offline",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    textAlign = TextAlign.Center,
+                )
+            }
             Spacer(modifier = Modifier.height(32.dp))
             ReviewMode.entries.forEach { mode ->
                 Button(
@@ -185,12 +219,16 @@ private fun ModeSelectState(
             ) {
                 Text("Word list")
             }
-            Spacer(modifier = Modifier.height(8.dp))
-            OutlinedButton(
-                modifier = Modifier.fillMaxWidth(),
-                onClick = onSignIn,
-            ) {
-                Text("Sign in with Google")
+            if (!isSignedIn) {
+                Spacer(modifier = Modifier.height(8.dp))
+                GoogleSignInButton(
+                    sessionStore = sessionStore,
+                    modifier = Modifier.fillMaxWidth(),
+                    onSignedIn = {
+                        isSignedIn = true
+                        onSignedIn()
+                    },
+                )
             }
         }
     }
@@ -293,9 +331,38 @@ private fun VocabularyListRow(
 }
 
 @Composable
-private fun LoadingState(modifier: Modifier = Modifier) {
-    Box(modifier = modifier, contentAlignment = Alignment.Center) {
+private fun SyncingVocabularyState(
+    reviewMode: ReviewMode?,
+    onBack: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    Column(
+        modifier = modifier.padding(24.dp),
+        verticalArrangement = Arrangement.Center,
+        horizontalAlignment = Alignment.CenterHorizontally,
+    ) {
         CircularProgressIndicator()
+        Spacer(modifier = Modifier.height(16.dp))
+        Text(
+            text = if (reviewMode != null) {
+                "Downloading vocabulary for ${reviewMode.label.lowercase()}…"
+            } else {
+                "Downloading vocabulary…"
+            },
+            style = MaterialTheme.typography.bodyMedium,
+            textAlign = TextAlign.Center,
+        )
+        Spacer(modifier = Modifier.height(8.dp))
+        Text(
+            text = "This only happens the first time. Later sessions start instantly from cache.",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            textAlign = TextAlign.Center,
+        )
+        Spacer(modifier = Modifier.height(24.dp))
+        OutlinedButton(onClick = onBack) {
+            Text("Cancel")
+        }
     }
 }
 
@@ -324,9 +391,26 @@ private fun ErrorState(
 }
 
 @Composable
+private fun TapToContinueOverlay(
+    onTap: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    Box(
+        modifier = modifier
+            .fillMaxSize()
+            .clickable(
+                interactionSource = remember { MutableInteractionSource() },
+                indication = null,
+                onClick = onTap,
+            ),
+    )
+}
+
+@Composable
 private fun ReadyState(
     uiState: ReviewUiState,
     onSubmitOption: (String) -> Unit,
+    onInflectionAnswerChange: (String) -> Unit,
     onAddReorderToken: (Int) -> Unit,
     onRemoveReorderToken: (Int) -> Unit,
     onCheck: () -> Unit,
@@ -338,19 +422,16 @@ private fun ReadyState(
     val questionKey = question?.candidate?.questionKey
     val canTapToContinue = uiState.interactionPhase == QuestionInteractionPhase.CHECKED ||
         uiState.interactionPhase == QuestionInteractionPhase.SKIPPED
-    val canReorderTapToCheck = uiState.interactionPhase == QuestionInteractionPhase.ANSWERING &&
-        question is RenderedQuestion.Reorder &&
-        uiState.canCheckAnswer()
+    val canTapEmptyToCheck = uiState.interactionPhase == QuestionInteractionPhase.ANSWERING &&
+        uiState.canCheckAnswer() &&
+        (question is RenderedQuestion.Reorder || question is RenderedQuestion.Inflection)
     val isWrong = uiState.interactionPhase == QuestionInteractionPhase.CHECKED &&
         uiState.lastCheckCorrect == false
     val isSkipped = uiState.interactionPhase == QuestionInteractionPhase.SKIPPED
-    val tapContinueInteraction = remember { MutableInteractionSource() }
-    val reorderTapCheckInteraction = remember { MutableInteractionSource() }
+    val emptyTapCheckInteraction = remember { MutableInteractionSource() }
     var advanceConsumed by remember(questionKey) { mutableStateOf(false) }
-    var reorderCheckConsumed by remember(questionKey) { mutableStateOf(false) }
+    var emptyTapCheckConsumed by remember(questionKey) { mutableStateOf(false) }
     val view = LocalView.current
-    val isReorder = question is RenderedQuestion.Reorder
-
     val advanceOnce = {
         if (!advanceConsumed) {
             advanceConsumed = true
@@ -358,9 +439,9 @@ private fun ReadyState(
         }
     }
 
-    val checkReorderFromEmptyTap = {
-        if (!reorderCheckConsumed) {
-            reorderCheckConsumed = true
+    val checkFromEmptyTap = {
+        if (!emptyTapCheckConsumed) {
+            emptyTapCheckConsumed = true
             onCheck()
         }
     }
@@ -387,132 +468,136 @@ private fun ReadyState(
         }
     }
 
-    Column(
-        modifier = modifier.padding(horizontal = 20.dp, vertical = 16.dp),
-    ) {
-        VocabularySyncStatus(
-            source = uiState.vocabularySource,
-            wordCount = uiState.vocabularyCount,
-            questionCount = uiState.totalCandidates,
-        )
-        Spacer(modifier = Modifier.height(8.dp))
-        Box(
+    Box(modifier = modifier.fillMaxSize()) {
+        Column(
             modifier = Modifier
-                .weight(1f)
-                .fillMaxWidth()
                 .fillMaxSize()
-                .verticalScroll(rememberScrollState())
-                .then(
-                    when {
-                        canTapToContinue -> Modifier.clickable(
-                            interactionSource = tapContinueInteraction,
-                            indication = null,
-                            onClick = advanceOnce,
-                        )
-                        canReorderTapToCheck -> Modifier.clickable(
-                            interactionSource = reorderTapCheckInteraction,
-                            indication = null,
-                            onClick = checkReorderFromEmptyTap,
-                        )
-                        else -> Modifier
-                    },
-                ),
-            contentAlignment = Alignment.Center,
+                .padding(horizontal = 20.dp, vertical = 16.dp),
         ) {
-            Column(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalAlignment = Alignment.CenterHorizontally,
+            VocabularySyncStatus(
+                source = uiState.vocabularySource,
+                wordCount = uiState.vocabularyCount,
+                questionCount = uiState.totalCandidates,
+            )
+            Spacer(modifier = Modifier.height(8.dp))
+            Box(
+                modifier = Modifier
+                    .weight(1f)
+                    .fillMaxWidth()
+                    .verticalScroll(rememberScrollState())
+                    .then(
+                        if (canTapEmptyToCheck) {
+                            Modifier.clickable(
+                                interactionSource = emptyTapCheckInteraction,
+                                indication = null,
+                                onClick = checkFromEmptyTap,
+                            )
+                        } else {
+                            Modifier
+                        },
+                    ),
+                contentAlignment = Alignment.Center,
             ) {
-                AnimatedVisibility(
-                    visible = canTapToContinue && uiState.interactionPhase == QuestionInteractionPhase.CHECKED,
-                    enter = fadeIn(),
-                    exit = fadeOut(),
+                Column(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalAlignment = Alignment.CenterHorizontally,
                 ) {
-                    FeedbackResultBanner(
-                        isCorrect = uiState.lastCheckCorrect == true,
-                        modifier = Modifier.fillMaxWidth(),
-                    )
-                }
-                if (canTapToContinue && (isWrong || isSkipped)) {
-                    uiState.wrongAnswerContext?.let { context ->
-                        Spacer(modifier = Modifier.height(12.dp))
-                        WrongAnswerLearningCard(context = context)
+                    AnimatedVisibility(
+                        visible = canTapToContinue &&
+                            uiState.interactionPhase == QuestionInteractionPhase.CHECKED,
+                        enter = fadeIn(),
+                        exit = fadeOut(),
+                    ) {
+                        FeedbackResultBanner(
+                            isCorrect = uiState.lastCheckCorrect == true,
+                            modifier = Modifier.fillMaxWidth(),
+                        )
+                    }
+                    if (canTapToContinue && (isWrong || isSkipped)) {
+                        uiState.wrongAnswerContext?.let { context ->
+                            Spacer(modifier = Modifier.height(12.dp))
+                            WrongAnswerLearningCard(context = context)
+                        }
+                    }
+                    if (canTapToContinue) {
+                        Spacer(modifier = Modifier.height(16.dp))
+                    }
+                    when (question) {
+                        is RenderedQuestion.Meaning -> MeaningQuestionContent(
+                            question = question,
+                            selectedOptionKey = uiState.selectedOptionKey,
+                            interactionPhase = uiState.interactionPhase,
+                            onSelectOption = onSubmitOption,
+                        )
+                        is RenderedQuestion.Reorder -> ReorderQuestionContent(
+                            question = question,
+                            bankSlots = uiState.reorderBankSlots(),
+                            selectedTokens = uiState.reorderSelectedTokens,
+                            interactionPhase = uiState.interactionPhase,
+                            onAddTokenAtSlot = onAddReorderToken,
+                            onRemoveTokenAtIndex = onRemoveReorderToken,
+                        )
+                        is RenderedQuestion.Usage -> UsageQuestionContent(
+                            question = question,
+                            selectedOptionKey = uiState.selectedOptionKey,
+                            interactionPhase = uiState.interactionPhase,
+                            onSelectOption = onSubmitOption,
+                        )
+                        is RenderedQuestion.Inflection -> InflectionQuestionContent(
+                            question = question,
+                            answerText = uiState.inflectionAnswerText,
+                            interactionPhase = uiState.interactionPhase,
+                            onAnswerTextChange = onInflectionAnswerChange,
+                        )
+                        null -> Text("No question loaded.")
+                    }
+                    if (canTapToContinue) {
+                        Spacer(modifier = Modifier.height(24.dp))
+                        Text(
+                            text = "Tap to continue",
+                            style = MaterialTheme.typography.labelMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.8f),
+                            modifier = Modifier.fillMaxWidth(),
+                            textAlign = TextAlign.Center,
+                        )
                     }
                 }
-                if (canTapToContinue) {
-                    Spacer(modifier = Modifier.height(16.dp))
-                }
-                when (question) {
-                    is RenderedQuestion.Meaning -> MeaningQuestionContent(
-                        question = question,
-                        selectedOptionKey = uiState.selectedOptionKey,
-                        interactionPhase = uiState.interactionPhase,
-                        onSelectOption = onSubmitOption,
-                    )
-                    is RenderedQuestion.Reorder -> ReorderQuestionContent(
-                        question = question,
-                        bankSlots = uiState.reorderBankSlots(),
-                        selectedTokens = uiState.reorderSelectedTokens,
-                        interactionPhase = uiState.interactionPhase,
-                        onAddTokenAtSlot = onAddReorderToken,
-                        onRemoveTokenAtIndex = onRemoveReorderToken,
-                    )
-                    is RenderedQuestion.Usage -> UsageQuestionContent(
-                        question = question,
-                        selectedOptionKey = uiState.selectedOptionKey,
-                        interactionPhase = uiState.interactionPhase,
-                        onSelectOption = onSubmitOption,
-                    )
-                    is RenderedQuestion.Inflection -> InflectionQuestionContent(
-                        question = question,
-                        selectedOptionKey = uiState.selectedOptionKey,
-                        interactionPhase = uiState.interactionPhase,
-                        onSelectOption = onSubmitOption,
-                    )
-                    null -> Text("No question loaded.")
-                }
-                if (canTapToContinue) {
-                    Spacer(modifier = Modifier.height(24.dp))
-                    Text(
-                        text = "Tap to continue",
-                        style = MaterialTheme.typography.labelMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.8f),
-                        modifier = Modifier.fillMaxWidth(),
-                        textAlign = TextAlign.Center,
-                    )
-                }
             }
-        }
 
-        if (uiState.interactionPhase == QuestionInteractionPhase.ANSWERING) {
-            Spacer(modifier = Modifier.height(16.dp))
-            if (isReorder) {
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(12.dp),
-                ) {
+            if (uiState.interactionPhase == QuestionInteractionPhase.ANSWERING) {
+                Spacer(modifier = Modifier.height(16.dp))
+                if (question is RenderedQuestion.Inflection) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(12.dp),
+                    ) {
+                        OutlinedButton(
+                            modifier = Modifier.weight(1f),
+                            onClick = onSkip,
+                        ) {
+                            Text("Skip")
+                        }
+                        Button(
+                            modifier = Modifier.weight(1f),
+                            enabled = uiState.canCheckAnswer(),
+                            onClick = onCheck,
+                        ) {
+                            Text("Check")
+                        }
+                    }
+                } else {
                     OutlinedButton(
-                        modifier = Modifier.weight(1f),
+                        modifier = Modifier.fillMaxWidth(),
                         onClick = onSkip,
                     ) {
                         Text("Skip")
                     }
-                    Button(
-                        modifier = Modifier.weight(1f),
-                        enabled = uiState.canCheckAnswer(),
-                        onClick = onCheck,
-                    ) {
-                        Text("Check")
-                    }
-                }
-            } else {
-                OutlinedButton(
-                    modifier = Modifier.fillMaxWidth(),
-                    onClick = onSkip,
-                ) {
-                    Text("Skip")
                 }
             }
+        }
+
+        if (canTapToContinue) {
+            TapToContinueOverlay(onTap = advanceOnce)
         }
     }
 }
@@ -607,10 +692,11 @@ private fun ReviewSessionPreview() {
                     ),
                 ),
             ),
+            sessionStore = null,
             onSelectMode = {},
             onOpenVocabularyList = {},
-            onSignIn = {},
             onSubmitOption = {},
+            onInflectionAnswerChange = {},
             onAddReorderToken = {},
             onRemoveReorderToken = {},
             onCheck = {},
@@ -618,6 +704,7 @@ private fun ReviewSessionPreview() {
             onNext = {},
             onRetryLoad = {},
             onReturnToModeSelect = {},
+            onSignedIn = {},
         )
     }
 }

@@ -53,10 +53,16 @@ Supabase data after Google sign-in. For wider release, the RLS model must move
 from admin-only personal access to normal `auth.uid() = user_id` ownership before
 the mobile app is distributed.
 
-The mobile app should cache the fetched vocabulary data locally for offline
-review. A simple refresh on app start is enough for v1. Incremental pull by
-`vocabulary_changes.server_revision` can be added later if full sync efficiency
-matters.
+The mobile app should cache vocabulary locally as a read-only replica of
+Supabase, mirroring the desktop Tauri flow:
+
+1. Bootstrap copies `user_lexemes`, `lexeme_forms`, and active `card_snapshots`
+   into Room on first sync for a signed-in user.
+2. Incremental pull uses Supabase RPC `pull_vocabulary_changes` keyed by
+   `server_revision`, applying `card_snapshot` upserts into the local replica.
+
+Mobile v1 remains read-only: no mutation outbox or `apply_vocabulary_mutation`
+push.
 
 ## Question Identity
 
@@ -393,8 +399,9 @@ Recommended Android stack:
   option generation, weighting, and stats updates.
 - Serialization: `kotlinx.serialization` for Supabase JSON payloads and local
   fixture tests.
-- Network/auth: Supabase Kotlin client with Auth and PostgREST modules. Use PKCE
-  OAuth and Android deep-link handling for Google sign-in.
+- Network/auth: Supabase Kotlin client with Auth, Compose Auth, and PostgREST
+  modules. Use native Google sign-in via Android Credential Manager and
+  `signInWith(IDToken)` against the shared Supabase project.
 - HTTP transport: Ktor client through the Supabase Kotlin stack.
 - Local database: Room as the first choice once local stats and cache need a
   durable store. SQLDelight remains a reasonable alternative if the project later

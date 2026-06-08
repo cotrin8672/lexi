@@ -31,6 +31,8 @@ data class CachedCardSnapshotEntity(
     val active: Boolean,
     val createdAt: String,
     val updatedAt: String,
+    val remoteOperationId: String? = null,
+    val remoteServerRevision: Long? = null,
 )
 
 @Entity(

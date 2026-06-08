@@ -33,16 +33,24 @@ run = "dotenvx run -f ../.env -- cargo check"
 dir = "src-tauri"
 
 [tasks.mobile-test]
-description = "Run Lexi Review Android unit tests"
+description = "Run Lexi Review Android unit tests (.env: LEXI_SUPABASE_URL, SUPABASE_PUBLISHABLE_KEY, LEXI_GOOGLE_WEB_CLIENT_ID)"
 run = "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/run-mobile-gradle.ps1 :app:testDebugUnitTest"
 
 [tasks.mobile-build]
-description = "Build the Lexi Review Android debug APK"
+description = "Build the Lexi Review Android debug APK (.env: LEXI_SUPABASE_URL, SUPABASE_PUBLISHABLE_KEY, LEXI_GOOGLE_WEB_CLIENT_ID)"
 run = "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/run-mobile-gradle.ps1 :app:assembleDebug"
 
 [tasks.mobile-install]
-description = "Install the Lexi Review Android debug APK on the connected device"
+description = "Install the Lexi Review Android debug APK on the connected device (.env: LEXI_SUPABASE_URL, SUPABASE_PUBLISHABLE_KEY, LEXI_GOOGLE_WEB_CLIENT_ID)"
 run = "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/run-mobile-gradle.ps1 :app:installDebug"
+
+[tasks.mobile-signing-report]
+description = "Print Android debug/release SHA-1 fingerprints for GCP OAuth setup"
+run = "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/run-mobile-gradle.ps1 :app:signingReport"
+
+[tasks.mobile-env-check]
+description = "Validate decrypted mobile .env values for Supabase and Google native auth"
+run = "dotenvx run -f .env -- powershell -NoProfile -ExecutionPolicy Bypass -File scripts/validate-mobile-env.ps1"
 
 [tasks.mobile-adb-devices]
 description = "List Android devices visible to adb"

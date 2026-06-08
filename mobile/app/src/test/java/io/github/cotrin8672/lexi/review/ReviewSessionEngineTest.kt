@@ -177,19 +177,38 @@ class ReviewSessionEngineTest {
         assertTrue(!context!!.correctAnswer.isBlank())
     }
 
+    @Test
+    fun inflectionOnlyModeAcceptsTypedIrregularAnswer() {
+        val engine = ReviewSessionEngine(now = { ReviewFixtures.FIXTURE_TIMESTAMP })
+        engine.startWithCards(cards, VocabularySource.FIXTURE, ReviewMode.INFLECTION_ONLY)
+
+        val question = engine.state.currentQuestion as? RenderedQuestion.Inflection
+            ?: error("expected inflection question")
+        assertEquals("went", question.expectedForm)
+
+        engine.updateInflectionAnswer("went")
+        engine.checkAnswer()
+        assertEquals(QuestionInteractionPhase.CHECKED, engine.state.interactionPhase)
+        assertEquals(true, engine.state.lastCheckCorrect)
+    }
+
     private fun forceCorrectAnswer(engine: ReviewSessionEngine) {
         when (val question = engine.state.currentQuestion) {
             is RenderedQuestion.Meaning,
             is RenderedQuestion.Usage,
-            is RenderedQuestion.Inflection,
             -> {
                 val options = when (question) {
                     is RenderedQuestion.Meaning -> question.options
                     is RenderedQuestion.Usage -> question.options
-                    is RenderedQuestion.Inflection -> question.options
+                    is RenderedQuestion.Inflection,
+                    is RenderedQuestion.Reorder,
+                    -> error("unexpected question type")
                 }
                 val correct = options.first { it.isCorrect }
                 engine.selectOption(correct.answerKey)
+            }
+            is RenderedQuestion.Inflection -> {
+                engine.updateInflectionAnswer(question.expectedForm)
             }
             is RenderedQuestion.Reorder -> {
                 question.bankOrder.indices.forEach { index ->

@@ -11,7 +11,8 @@ import io.github.cotrin8672.lexi.review.storage.VocabularySource
 
 enum class SessionLoadPhase {
     MODE_SELECT,
-    LOADING,
+    /** Waiting on first-time vocabulary download; distinct from cache reads. */
+    SYNCING_VOCABULARY,
     READY,
     ERROR,
     VOCABULARY_LIST,
@@ -55,7 +56,7 @@ sealed interface RenderedQuestion {
     data class Inflection(
         override val candidate: QuestionCandidate,
         val primaryText: String,
-        val options: List<MeaningOption>,
+        val expectedForm: String,
     ) : RenderedQuestion
 }
 
@@ -69,6 +70,7 @@ data class ReviewUiState(
     val interactionPhase: QuestionInteractionPhase = QuestionInteractionPhase.ANSWERING,
     val currentQuestion: RenderedQuestion? = null,
     val selectedOptionKey: String? = null,
+    val inflectionAnswerText: String = "",
     val reorderBankOrder: List<String> = emptyList(),
     val reorderSelectedTokens: List<String> = emptyList(),
     val lastCheckCorrect: Boolean? = null,
@@ -77,6 +79,8 @@ data class ReviewUiState(
     val sessionCorrect: Int = 0,
     val vocabularyList: List<VocabularyListItem> = emptyList(),
     val vocabularyCount: Int = 0,
+    val vocabularySyncInProgress: Boolean = false,
+    val vocabularyCacheReady: Boolean = false,
 ) {
     fun reorderAvailableTokens(): List<String> =
         availableReorderTokens(reorderBankOrder, reorderSelectedTokens)
@@ -94,7 +98,8 @@ fun ReviewUiState.canCheckAnswer(): Boolean {
             reorderAvailableTokens().isEmpty() && reorderSelectedTokens.isNotEmpty()
         is RenderedQuestion.Meaning,
         is RenderedQuestion.Usage,
-        is RenderedQuestion.Inflection,
         null -> false
+        is RenderedQuestion.Inflection ->
+            inflectionAnswerText.isNotBlank()
     }
 }

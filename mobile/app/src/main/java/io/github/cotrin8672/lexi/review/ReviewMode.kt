@@ -4,7 +4,7 @@ enum class ReviewMode(val label: String) {
     MEANING_ONLY("Meaning only"),
     REORDER_ONLY("Sentence reorder only"),
     USAGE_ONLY("Usage only"),
-    INFLECTION_ONLY("Inflection only"),
+    INFLECTION_ONLY("Irregular inflection"),
     MIXED_RANDOM("Mixed random"),
 }
 
