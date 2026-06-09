@@ -46,6 +46,11 @@ pub fn setup(app: &mut App) -> Result<(), Box<dyn std::error::Error>> {
 
 pub fn show_main_window(app: &AppHandle) {
     if let Some(window) = app.get_webview_window("main") {
+        if let Some(settings_state) = app.try_state::<crate::settings::SettingsState>() {
+            if let Ok(settings) = settings_state.load_settings(app) {
+                let _ = window.set_always_on_top(settings.popup_always_on_top);
+            }
+        }
         let _ = window.show();
         let _ = window.unminimize();
         let _ = window.set_focus();

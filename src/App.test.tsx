@@ -110,9 +110,11 @@ function renderPopup(
         }}
         activeResultTab={activeResultTab}
         themeMode="light"
+        popupAlwaysOnTop={false}
         onClose={noop}
         onRetry={noop}
         onSetResultTab={noop}
+        onTogglePopupAlwaysOnTop={noop}
       />
     ),
     root,
@@ -369,7 +371,7 @@ describe("PopupView", () => {
 
   it("renders a headword voice button for word-study results", () => {
     const root = renderPopup(readyState());
-    const button = root.querySelector(".headword-voice-button");
+    const button = root.querySelector(".header-icon-button[aria-label*='発音']");
 
     expect(button).toBeInstanceOf(HTMLButtonElement);
     expect(button?.getAttribute("aria-label")).toContain("subtle");
@@ -377,10 +379,73 @@ describe("PopupView", () => {
     expect(speakableHeadwordForState(readyState())).toBe("subtle");
   });
 
+  it("renders an always-on-top pin toggle in the popup header", () => {
+    const root = document.createElement("div");
+    render(
+      () => (
+        <PopupView
+          state={readyState()}
+          providerSettings={null}
+          syncAuthStatus={{
+            configured: true,
+            signedIn: true,
+            userId: "user-1",
+            userEmail: "lexi@example.com",
+            callbackUrl: "http://localhost:38271/auth/callback",
+          }}
+          activeResultTab="meaning"
+          themeMode="light"
+          popupAlwaysOnTop={false}
+          onClose={noop}
+          onRetry={noop}
+          onSetResultTab={noop}
+          onTogglePopupAlwaysOnTop={noop}
+        />
+      ),
+      root,
+    );
+
+    const button = root.querySelector(".header-icon-button[aria-label*='最前面']");
+    expect(button).toBeInstanceOf(HTMLButtonElement);
+    expect(button?.getAttribute("aria-pressed")).toBe("false");
+    expect(root.querySelector(".headword-actions")).toBeInstanceOf(HTMLElement);
+  });
+
+  it("shows pinned state on the always-on-top toggle", () => {
+    const root = document.createElement("div");
+    render(
+      () => (
+        <PopupView
+          state={readyState()}
+          providerSettings={null}
+          syncAuthStatus={{
+            configured: true,
+            signedIn: true,
+            userId: "user-1",
+            userEmail: "lexi@example.com",
+            callbackUrl: "http://localhost:38271/auth/callback",
+          }}
+          activeResultTab="meaning"
+          themeMode="light"
+          popupAlwaysOnTop={true}
+          onClose={noop}
+          onRetry={noop}
+          onSetResultTab={noop}
+        />
+      ),
+      root,
+    );
+
+    const button = root.querySelector(".header-icon-button[aria-label*='最前面']");
+    expect(button?.classList.contains("is-active")).toBe(true);
+    expect(button?.getAttribute("aria-pressed")).toBe("true");
+    expect(button?.getAttribute("aria-label")).toContain("最前面固定を解除");
+  });
+
   it("does not render a headword voice button for text translation results", () => {
     const root = renderPopup(readyState(mockTextTranslationResult()));
 
-    expect(root.querySelector(".headword-voice-button")).toBeNull();
+    expect(root.querySelector(".header-icon-button[aria-label*='発音']")).toBeNull();
     expect(speakableHeadwordForState(readyState(mockTextTranslationResult()))).toBeNull();
   });
 
@@ -388,7 +453,7 @@ describe("PopupView", () => {
     const root = renderPopup(readyState(mockJapaneseWordCandidatesResult()));
 
     expect(root.querySelector(".headword")?.textContent).toBe("採用");
-    expect(root.querySelector(".headword-voice-button")).toBeNull();
+    expect(root.querySelector(".header-icon-button[aria-label*='発音']")).toBeNull();
     expect(speakableHeadwordForState(readyState(mockJapaneseWordCandidatesResult()))).toBeNull();
     expect(root.textContent).toContain("adopt");
     expect(root.textContent).toContain("hire");
@@ -416,7 +481,7 @@ describe("PopupView", () => {
     });
 
     expect(root.querySelector(".headword")?.textContent).toBe("採用");
-    expect(root.querySelector(".headword-voice-button")).toBeNull();
+    expect(root.querySelector(".header-icon-button[aria-label*='発音']")).toBeNull();
     expect(root.textContent).toContain("adopt");
     expect(root.querySelectorAll(".candidate-row.content-reveal").length).toBe(1);
     expect(root.querySelector(".candidate-row.skeleton-row")).toBeNull();

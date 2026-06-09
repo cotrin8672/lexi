@@ -96,6 +96,7 @@ Out of scope for the first release:
 - Use compact controls and clear state changes rather than decorative panels.
 - For word-study results, keep the headword, nuance, meanings, and related-word details scannable in the resizable popup, with only the card body scrolling when content exceeds available height.
 - The headword header should include a compact voice icon for pronunciation. The icon should remain visible while the headword is shown during word-study streaming and ready states.
+- The popup header should include a pin control that toggles whether the translation window stays always on top. The choice should persist across popup reopen and app restart.
 - For errors, show a short user-facing message plus a details affordance when technical information exists.
 
 ## LLM Output Schema

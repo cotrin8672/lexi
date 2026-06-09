@@ -62,6 +62,8 @@ pub struct ProviderSettings {
     pub supabase_anon_key: String,
     #[serde(default = "default_supabase_callback_port")]
     pub supabase_callback_port: u16,
+    #[serde(default)]
+    pub popup_always_on_top: bool,
 }
 
 impl Default for ProviderSettings {
@@ -79,6 +81,7 @@ impl Default for ProviderSettings {
             supabase_url: String::new(),
             supabase_anon_key: String::new(),
             supabase_callback_port: default_supabase_callback_port(),
+            popup_always_on_top: false,
         }
     }
 }
@@ -128,6 +131,7 @@ pub struct ProviderSettingsView {
     pub deepl_api_key_configured: bool,
     pub supabase_anon_key_configured: bool,
     pub supabase_callback_url: String,
+    pub popup_always_on_top: bool,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -252,6 +256,7 @@ impl SettingsState {
             supabase_url,
             supabase_anon_key,
             supabase_callback_port: previous_settings.supabase_callback_port,
+            popup_always_on_top: previous_settings.popup_always_on_top,
         };
 
         if let Some(api_key) = update.api_key {
@@ -325,7 +330,34 @@ fn settings_view(app: &AppHandle, settings: ProviderSettings) -> ProviderSetting
         deepl_api_key_configured,
         supabase_anon_key_configured,
         supabase_callback_url,
+        popup_always_on_top: settings.popup_always_on_top,
     }
+}
+
+pub fn apply_popup_always_on_top(app: &AppHandle, enabled: bool) -> Result<(), AppError> {
+    let Some(window) = app.get_webview_window("main") else {
+        return Ok(());
+    };
+
+    window.set_always_on_top(enabled).map_err(|error| {
+        AppError::settings_io_failed(
+            format!("popup always-on-top update failed: {error}"),
+            true,
+        )
+    })
+}
+
+#[tauri::command]
+pub fn set_popup_always_on_top(
+    app: AppHandle,
+    state: tauri::State<'_, SettingsState>,
+    enabled: bool,
+) -> Result<(), AppError> {
+    let mut settings = state.load_settings(&app)?;
+    settings.popup_always_on_top = enabled;
+    write_settings(&app, &settings)?;
+    *state.settings.lock().expect("settings state poisoned") = Some(settings);
+    apply_popup_always_on_top(&app, enabled)
 }
 
 fn env_setting(name: &str) -> Option<String> {

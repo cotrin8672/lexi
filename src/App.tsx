@@ -13,6 +13,8 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { getCurrentWindow, LogicalSize } from "@tauri-apps/api/window";
+import Pin from "lucide-solid/icons/pin";
+import Volume2 from "lucide-solid/icons/volume-2";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import type { AppError } from "./lib/errors";
 import { speakText } from "./lib/speech";
@@ -90,6 +92,7 @@ export type ProviderSettings = {
   deeplApiKeyConfigured: boolean;
   supabaseAnonKeyConfigured?: boolean;
   supabaseCallbackUrl?: string;
+  popupAlwaysOnTop?: boolean;
 };
 
 export type ProviderSettingsUpdate = {
@@ -301,6 +304,7 @@ function App() {
     createSignal<ResultTab>("meaning");
   const [themeMode, setThemeMode] = createSignal<ThemeMode>("light");
   const [backgroundOpacity, setBackgroundOpacity] = createSignal(0.94);
+  const [popupAlwaysOnTop, setPopupAlwaysOnTop] = createSignal(false);
   const authRequired = createMemo(
     () => syncAuthStatus() === null || !syncAuthStatus()!.signedIn,
   );
@@ -378,6 +382,17 @@ function App() {
     await openUrl(started.authUrl);
   }
 
+  async function togglePopupAlwaysOnTop() {
+    const next = !popupAlwaysOnTop();
+    const previous = popupAlwaysOnTop();
+    setPopupAlwaysOnTop(next);
+    try {
+      await invoke("set_popup_always_on_top", { enabled: next });
+    } catch {
+      setPopupAlwaysOnTop(previous);
+    }
+  }
+
   async function applyWindowMode(requiredAuth: boolean) {
     const nextMode = requiredAuth ? "auth" : "popup";
     if (windowMode === nextMode) {
@@ -408,6 +423,7 @@ function App() {
       setProviderSettings(settings);
       setBackgroundOpacity(settings.backgroundOpacity);
       setThemeMode(settings.theme);
+      setPopupAlwaysOnTop(settings.popupAlwaysOnTop ?? false);
     });
 
     void invoke<SyncAuthStatus>("get_sync_auth_status").then(setSyncAuthStatus);
@@ -595,6 +611,7 @@ function App() {
       setProviderSettings(event.payload.settings);
       setBackgroundOpacity(event.payload.settings.backgroundOpacity);
       setThemeMode(event.payload.themeMode);
+      setPopupAlwaysOnTop(event.payload.settings.popupAlwaysOnTop ?? false);
       setState((current) => ({
         ...current,
         shortcut: event.payload.settings.shortcut,
@@ -668,11 +685,13 @@ function App() {
       activeResultTab={activeResultTab()}
       themeMode={themeMode()}
       backgroundOpacity={backgroundOpacity()}
+      popupAlwaysOnTop={popupAlwaysOnTop()}
       onClose={closePopup}
       onRetry={retryCurrent}
       onStartGoogleSignIn={startGoogleSignIn}
       onSetResultTab={setActiveResultTab}
       onStartWindowDrag={startWindowDrag}
+      onTogglePopupAlwaysOnTop={togglePopupAlwaysOnTop}
     />
   );
 }
@@ -684,11 +703,13 @@ export function PopupView(props: {
   activeResultTab: ResultTab;
   themeMode: ThemeMode;
   backgroundOpacity?: number;
+  popupAlwaysOnTop?: boolean;
   onClose: () => void;
   onRetry: () => void;
   onStartGoogleSignIn?: () => Promise<void>;
   onSetResultTab: (tab: ResultTab) => void;
   onStartWindowDrag?: (event: MouseEvent) => void;
+  onTogglePopupAlwaysOnTop?: () => void;
 }) {
   const backgroundOpacity = () => props.backgroundOpacity ?? 0.94;
   const authRequired = () =>
@@ -712,17 +733,23 @@ export function PopupView(props: {
           <div class="title-block">
             <div class="headword-row">
               <h1 class="headword">{headwordForState(props.state)}</h1>
-              <Show when={speakableHeadwordForState(props.state)}>
-                {(headword) => (
-                  <HeadwordVoiceButton
-                    headword={headword()}
-                    shortcutLabel={
-                      props.providerSettings?.pronunciationShortcut ??
-                      DEFAULT_PRONUNCIATION_SHORTCUT
-                    }
-                  />
-                )}
-              </Show>
+              <div class="headword-actions">
+                <AlwaysOnTopPinButton
+                  pinned={props.popupAlwaysOnTop === true}
+                  onToggle={props.onTogglePopupAlwaysOnTop}
+                />
+                <Show when={speakableHeadwordForState(props.state)}>
+                  {(headword) => (
+                    <HeadwordVoiceButton
+                      headword={headword()}
+                      shortcutLabel={
+                        props.providerSettings?.pronunciationShortcut ??
+                        DEFAULT_PRONUNCIATION_SHORTCUT
+                      }
+                    />
+                  )}
+                </Show>
+              </div>
             </div>
             <InflectionLine
               headword={headwordForState(props.state)}
@@ -790,13 +817,45 @@ export function PopupView(props: {
   );
 }
 
+const HEADER_ICON_SIZE = 18;
+const HEADER_ICON_STROKE = 2;
+
+function AlwaysOnTopPinButton(props: {
+  pinned: boolean;
+  onToggle?: () => void;
+}) {
+  return (
+    <button
+      class="header-icon-button"
+      classList={{ "is-active": props.pinned }}
+      type="button"
+      aria-label={
+        props.pinned ? "最前面固定を解除" : "最前面に固定"
+      }
+      aria-pressed={props.pinned}
+      title={props.pinned ? "最前面固定を解除" : "最前面に固定"}
+      onClick={(event) => {
+        event.stopPropagation();
+        props.onToggle?.();
+      }}
+    >
+      <Pin
+        size={HEADER_ICON_SIZE}
+        stroke-width={HEADER_ICON_STROKE}
+        fill={props.pinned ? "currentColor" : "none"}
+        aria-hidden="true"
+      />
+    </button>
+  );
+}
+
 function HeadwordVoiceButton(props: {
   headword: string;
   shortcutLabel: string;
 }) {
   return (
     <button
-      class="headword-voice-button"
+      class="header-icon-button"
       type="button"
       aria-label={`${props.headword} を発音 (${props.shortcutLabel})`}
       title={`発音 (${props.shortcutLabel})`}
@@ -805,14 +864,11 @@ function HeadwordVoiceButton(props: {
         speakText(props.headword);
       }}
     >
-      <span class="headword-voice-icon" aria-hidden="true">
-        <svg viewBox="0 0 24 24" width="20" height="20">
-          <path
-            fill="currentColor"
-            d="M3 10v4h4l5 5V5L7 10H3zm13.5 2c0-1.77-1.02-3.29-2.5-4.03v8.06c1.48-.74 2.5-2.26 2.5-4.03zM14 3.23v2.06c2.89.86 5 3.54 5 6.71s-2.11 5.85-5 6.71v2.06c4.01-.91 7-4.49 7-8.77s-2.99-7.86-7-8.77z"
-          />
-        </svg>
-      </span>
+      <Volume2
+        size={HEADER_ICON_SIZE}
+        stroke-width={HEADER_ICON_STROKE}
+        aria-hidden="true"
+      />
     </button>
   );
 }

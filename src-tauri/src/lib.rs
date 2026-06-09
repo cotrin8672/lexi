@@ -41,6 +41,7 @@ pub fn run() {
             llm::run_transform,
             llm::run_transform_stream,
             settings::get_provider_settings,
+            settings::set_popup_always_on_top,
             settings::update_provider_settings,
             shortcut::get_shortcut_status,
             speech::speak_headword,
