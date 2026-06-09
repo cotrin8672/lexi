@@ -233,24 +233,35 @@ create table question_stats (
 );
 ```
 
-Optional attempt log:
+Motivational stats tables (implemented):
 
 ```sql
-create table attempt_logs (
+create table review_attempt_events (
   id text primary key,
+  session_id text not null,
   question_key text not null,
   question_type text not null,
   lexeme_id text not null,
   correct integer not null,
-  selected_answer_key text,
-  correct_answer_key text,
-  option_answer_keys_json text,
-  reviewed_at text not null
+  answered_at text not null,
+  elapsed_active_millis integer not null
+);
+
+create table study_sessions (
+  id text primary key,
+  started_at text not null,
+  ended_at text,
+  active_millis integer not null,
+  answered_count integer not null,
+  correct_count integer not null
 );
 ```
 
-Attempt logs should be local and prunable. Keep only the latest bounded history
-unless later analysis needs long-term data.
+`cached_user_lexemes.created_at` mirrors Supabase `user_lexemes.created_at` so
+the stats dashboard can show new words added per day.
+
+Review stats and motivational metrics remain local for v1. They are not synced to
+Supabase.
 
 ## Weighted Question Selection
 

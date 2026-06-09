@@ -80,14 +80,23 @@ No browser deeplink callback is required on Android for native sign-in.
 
 - Pure Kotlin review extraction, stable question keys, option generation,
   weighting, and stats updates.
-- Room entities/DAO/database for cached vocabulary and `question_stats`.
+- Room entities/DAO/database for cached vocabulary, `question_stats`,
+  `review_attempt_events`, and `study_sessions`.
 - ViewModel-driven Compose review session UI with mode select, word list, and
   compact vocabulary source/count status during review.
 - Cached-first vocabulary loading with honest Supabase refresh errors.
 - Persisted question stats hydrated into session weighting on start.
 - Native Google sign-in through supabase-kt Compose Auth (Credential Manager)
   and read-only PostgREST refresh.
+- Local stats dashboard: today summary, streaks, 7-day charts, question-type
+  breakdown, weak words, and vocabulary growth. Entry point is the mode-select
+  `統計` button.
+- Study-session tracking during review with foreground-time measurement, idle
+  cap, and pause/resume lifecycle hooks.
+- Vocabulary `created_at` preserved from Supabase bootstrap/pull for per-day new
+  word counts.
 
 ## Next Steps
 
 1. Optional background refresh after cache hit when online.
+2. Optional cloud sync for review stats across devices.

@@ -255,10 +255,35 @@ Do not sync raw selected text, raw prompt bodies, raw provider responses, or cre
 - Store secrets through an OS-appropriate mechanism when provider configuration is implemented.
 - Avoid remote content in the Tauri webview unless explicitly required.
 
+## Mobile Review Stats
+
+The Android review app under `mobile/` keeps motivational statistics on-device only.
+Supabase vocabulary sync remains read-only; review events and study sessions are
+not pushed upstream in v1.
+
+Local Room tables:
+
+- `question_stats`: weighted sampling state per stable `questionKey`.
+- `review_attempt_events`: per-answer events for dashboard aggregation.
+- `study_sessions`: foreground study time and answer counts per review session.
+- `cached_user_lexemes.created_at`: mirrors Supabase lexeme creation time for
+  per-day new-word counts.
+
+Flow:
+
+1. `ReviewViewModel` starts a `study_sessions` row when a review session begins.
+2. `StudySessionTracker` measures foreground active time with a 5-minute idle cap.
+3. Each checked answer writes `question_stats`, `review_attempt_events`, and
+   session counters.
+4. `StatsViewModel` aggregates local history through `StatsAggregator` and
+   renders `StatsDashboardScreen` from mode select.
+
 ## Testing Strategy
 
 - Rust: unit tests for selection error mapping, LLM schema parsing, settings serialization, and redaction.
 - Frontend: component tests for popup state, result rendering, settings validation, and error rendering.
+- Mobile: unit tests for stats aggregation, session tracking, sync `createdAt`
+  mapping, `StatsViewModel`, and review-session event recording.
 - Integration: Tauri command tests where possible; manual desktop verification where OS APIs are involved.
 - PoC: app-by-app UI Automation matrix before committing to support claims.
 
