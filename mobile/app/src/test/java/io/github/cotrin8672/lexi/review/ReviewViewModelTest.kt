@@ -3,6 +3,7 @@ package io.github.cotrin8672.lexi.review
 import io.github.cotrin8672.lexi.review.fixtures.ReviewFixtures
 import io.github.cotrin8672.lexi.review.speech.WordSpeech
 import io.github.cotrin8672.lexi.review.speech.speakableHeadword
+import io.github.cotrin8672.lexi.review.storage.RecordingStatsStore
 import io.github.cotrin8672.lexi.review.storage.ReviewStore
 import io.github.cotrin8672.lexi.review.ui.QuestionInteractionPhase
 import io.github.cotrin8672.lexi.review.ui.RenderedQuestion
@@ -246,6 +247,116 @@ class ReviewViewModelTest {
         viewModel.addReorderToken(firstAvailableIndex)
 
         assertEquals(listOf(expectedToken), wordSpeech.spoken)
+    }
+
+    @Test
+    fun openStatsDashboardSetsNavigationPhase() = runTest(testDispatcher) {
+        val repository = RecordingVocabularyRepository(
+            cached = VocabularyLoadResult.Success(cards, VocabularySource.LOCAL_CACHE),
+        )
+        val viewModel = ReviewViewModel(
+            vocabularyRepository = repository,
+            sessionUserId = { ReviewFixtures.USER_ID },
+        )
+
+        viewModel.openStatsDashboard()
+        advanceUntilIdle()
+
+        assertEquals(SessionLoadPhase.STATS_DASHBOARD, viewModel.uiState.value.loadPhase)
+    }
+
+    @Test
+    fun startSessionStartsTrackedStudySession() = runTest(testDispatcher) {
+        val repository = RecordingVocabularyRepository(
+            cached = VocabularyLoadResult.Success(cards, VocabularySource.LOCAL_CACHE),
+        )
+        val statsStore = RecordingStatsStore()
+        val viewModel = ReviewViewModel(
+            vocabularyRepository = repository,
+            statsStore = statsStore,
+            sessionUserId = { ReviewFixtures.USER_ID },
+        )
+
+        viewModel.startSession(ReviewMode.MEANING_ONLY)
+        advanceUntilIdle()
+
+        assertEquals(1, statsStore.sessionsStarted.size)
+        assertEquals(0L, statsStore.sessionsStarted.first().activeMillis)
+        assertEquals(null, statsStore.sessionsStarted.first().endedAt)
+    }
+
+    @Test
+    fun submitOptionRecordsAttemptEventAndSessionAnswer() = runTest(testDispatcher) {
+        val repository = RecordingVocabularyRepository(
+            cached = VocabularyLoadResult.Success(cards, VocabularySource.LOCAL_CACHE),
+        )
+        val statsStore = RecordingStatsStore()
+        val viewModel = ReviewViewModel(
+            vocabularyRepository = repository,
+            statsStore = statsStore,
+            sessionUserId = { ReviewFixtures.USER_ID },
+        )
+
+        viewModel.startSession(ReviewMode.MEANING_ONLY)
+        advanceUntilIdle()
+
+        val question = viewModel.uiState.value.currentQuestion as RenderedQuestion.Meaning
+        val answerKey = question.options.first { it.isCorrect }.answerKey
+        viewModel.submitOption(answerKey)
+        advanceUntilIdle()
+        viewModel.submitOption(answerKey)
+        advanceUntilIdle()
+
+        assertEquals(1, statsStore.attemptEventsInserted.size)
+        val event = statsStore.attemptEventsInserted.first()
+        assertEquals(question.candidate.lexemeId, event.lexemeId)
+        assertEquals(question.candidate.questionType.name, event.questionType)
+        assertEquals(true, event.correct)
+        assertEquals(1, statsStore.sessionAnswersIncremented.size)
+        assertEquals(true, statsStore.sessionAnswersIncremented.first().second)
+    }
+
+    @Test
+    fun onPauseFlushesActiveMillisToStatsStore() = runTest(testDispatcher) {
+        val repository = RecordingVocabularyRepository(
+            cached = VocabularyLoadResult.Success(cards, VocabularySource.LOCAL_CACHE),
+        )
+        val statsStore = RecordingStatsStore()
+        val viewModel = ReviewViewModel(
+            vocabularyRepository = repository,
+            statsStore = statsStore,
+            sessionUserId = { ReviewFixtures.USER_ID },
+        )
+
+        viewModel.startSession(ReviewMode.MEANING_ONLY)
+        advanceUntilIdle()
+        viewModel.onPause()
+        advanceUntilIdle()
+
+        assertEquals(1, statsStore.sessionActiveMillisUpdates.size)
+        assertTrue(statsStore.sessionActiveMillisUpdates.first().second >= 0L)
+    }
+
+    @Test
+    fun returnToModeSelectEndsTrackedStudySession() = runTest(testDispatcher) {
+        val repository = RecordingVocabularyRepository(
+            cached = VocabularyLoadResult.Success(cards, VocabularySource.LOCAL_CACHE),
+        )
+        val statsStore = RecordingStatsStore()
+        val viewModel = ReviewViewModel(
+            vocabularyRepository = repository,
+            statsStore = statsStore,
+            sessionUserId = { ReviewFixtures.USER_ID },
+        )
+
+        viewModel.startSession(ReviewMode.MEANING_ONLY)
+        advanceUntilIdle()
+        viewModel.returnToModeSelect()
+        advanceUntilIdle()
+
+        assertEquals(1, statsStore.sessionsEnded.size)
+        assertEquals(1, statsStore.sessionActiveMillisUpdates.size)
+        assertEquals(SessionLoadPhase.MODE_SELECT, viewModel.uiState.value.loadPhase)
     }
 
     @Test

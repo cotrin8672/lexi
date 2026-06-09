@@ -17,6 +17,7 @@ enum class SessionLoadPhase {
     READY,
     ERROR,
     VOCABULARY_LIST,
+    STATS_DASHBOARD,
 }
 
 enum class QuestionInteractionPhase {

@@ -12,7 +12,11 @@ import io.github.cotrin8672.lexi.review.extractQuestionCandidates
 import io.github.cotrin8672.lexi.review.filterForMode
 import io.github.cotrin8672.lexi.review.loadSessionVocabulary
 import io.github.cotrin8672.lexi.review.storage.InMemoryReviewStore
+import io.github.cotrin8672.lexi.review.storage.InMemoryStatsStore
+import io.github.cotrin8672.lexi.review.storage.ReviewAttemptEvent
 import io.github.cotrin8672.lexi.review.storage.ReviewStore
+import io.github.cotrin8672.lexi.review.storage.StatsStore
+import io.github.cotrin8672.lexi.review.storage.StudySession
 import io.github.cotrin8672.lexi.review.storage.VocabularyLoadResult
 import io.github.cotrin8672.lexi.review.speech.NoOpWordSpeech
 import io.github.cotrin8672.lexi.review.speech.WordSpeech
@@ -21,7 +25,9 @@ import io.github.cotrin8672.lexi.review.storage.VocabularyRepository
 import io.github.cotrin8672.lexi.review.storage.VocabularySource
 import io.github.cotrin8672.lexi.review.sync.VocabularySyncCoordinator
 import io.github.cotrin8672.lexi.review.sync.syncErrorUserMessage
+import io.github.cotrin8672.lexi.review.stats.StudySessionTracker
 import io.github.cotrin8672.lexi.review.toVocabularyListItems
+import java.util.UUID
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -32,6 +38,7 @@ import java.time.Instant
 class ReviewViewModel(
     private val vocabularyRepository: VocabularyRepository,
     private val reviewStore: ReviewStore = InMemoryReviewStore(),
+    private val statsStore: StatsStore = InMemoryStatsStore(),
     private val wordSpeech: WordSpeech = NoOpWordSpeech,
     private val sessionUserId: () -> String? = { null },
     private val canRefreshFromSupabase: () -> Boolean = { false },
@@ -40,13 +47,16 @@ class ReviewViewModel(
     private val engine = ReviewSessionEngine(
         now = { Instant.now().toString() },
     )
+    private val studySessionTracker = StudySessionTracker()
 
     private val _uiState = MutableStateFlow(ReviewUiState())
     val uiState: StateFlow<ReviewUiState> = _uiState.asStateFlow()
 
     private var pendingRetryMode: ReviewMode? = null
     private var pendingVocabularyList = false
+    private var pendingStatsDashboard = false
     private var lastToastedSyncError: String? = null
+    private var activeStudySessionId: String? = null
 
     init {
         vocabularySync?.let { coordinator ->
@@ -126,6 +136,18 @@ class ReviewViewModel(
         }
     }
 
+    fun openStatsDashboard() {
+        pendingRetryMode = null
+        pendingVocabularyList = false
+        pendingStatsDashboard = true
+        setUiState(
+            _uiState.value.copy(
+                loadPhase = SessionLoadPhase.STATS_DASHBOARD,
+                errorMessage = null,
+            ),
+        )
+    }
+
     fun loadVocabularyList() {
         pendingVocabularyList = true
         pendingRetryMode = null
@@ -158,6 +180,7 @@ class ReviewViewModel(
                             mode = ReviewMode.MIXED_RANDOM,
                         ),
                     )
+                    beginStudySession()
                 }
                 is VocabularyLoadResult.Failure -> {
                     setUiState(
@@ -174,23 +197,41 @@ class ReviewViewModel(
 
     fun retryLastLoad() {
         when {
+            pendingStatsDashboard -> openStatsDashboard()
             pendingVocabularyList -> loadVocabularyList()
             pendingRetryMode != null -> startSession(pendingRetryMode!!)
             else -> loadVocabularyList()
         }
     }
 
+    /** Called when the review screen loses foreground while a session is active. */
+    fun onPause() {
+        studySessionTracker.pause()
+        viewModelScope.launch {
+            flushSessionActiveTime()
+        }
+    }
+
+    /** Called when the review screen regains foreground while a session is active. */
+    fun onResume() {
+        studySessionTracker.resume()
+    }
+
     fun returnToModeSelect() {
         pendingRetryMode = null
         pendingVocabularyList = false
-        val syncStatus = vocabularySync?.status?.value
-        _uiState.value = ReviewUiState(
-            loadPhase = SessionLoadPhase.MODE_SELECT,
-            vocabularySyncInProgress = syncStatus?.isSyncing == true,
-            hasLocalCache = syncStatus?.hasLocalCache == true,
-            vocabularyCacheReady = syncStatus?.cacheReady == true,
-            vocabularySyncError = syncStatus?.lastError,
-        )
+        pendingStatsDashboard = false
+        viewModelScope.launch {
+            endStudySessionIfActive()
+            val syncStatus = vocabularySync?.status?.value
+            _uiState.value = ReviewUiState(
+                loadPhase = SessionLoadPhase.MODE_SELECT,
+                vocabularySyncInProgress = syncStatus?.isSyncing == true,
+                hasLocalCache = syncStatus?.hasLocalCache == true,
+                vocabularyCacheReady = syncStatus?.cacheReady == true,
+                vocabularySyncError = syncStatus?.lastError,
+            )
+        }
     }
 
     /**
@@ -230,27 +271,28 @@ class ReviewViewModel(
     }
 
     fun updateInflectionAnswer(answerText: String) {
+        recordStudyInteraction()
         publish(engine.updateInflectionAnswer(answerText))
     }
 
     fun selectOption(answerKey: String) {
+        recordStudyInteraction()
         publish(engine.selectOption(answerKey))
     }
 
     fun submitOption(answerKey: String) {
         viewModelScope.launch {
+            recordStudyInteraction()
             val beforeKey = engine.state.currentQuestion?.candidate?.questionKey
             val beforePhase = engine.state.interactionPhase
             publish(engine.submitOption(answerKey))
             speakAfterMultipleChoiceCheck(beforePhase)
-            val afterKey = engine.state.currentQuestion?.candidate?.questionKey
-            if (beforeKey != null && beforeKey == afterKey) {
-                engine.statsSnapshot()[beforeKey]?.let { reviewStore.upsertStats(it) }
-            }
+            persistAnswerOutcome(beforeKey, beforePhase)
         }
     }
 
     fun addReorderToken(bankSlotIndex: Int) {
+        recordStudyInteraction()
         val beforeCount = engine.state.reorderSelectedTokens.size
         publish(engine.addReorderToken(bankSlotIndex))
         val addedToken = engine.state.reorderSelectedTokens
@@ -262,27 +304,28 @@ class ReviewViewModel(
     }
 
     fun removeReorderToken(selectedIndex: Int) {
+        recordStudyInteraction()
         publish(engine.removeReorderToken(selectedIndex))
     }
 
     fun checkAnswer() {
         viewModelScope.launch {
+            recordStudyInteraction()
             val beforeKey = engine.state.currentQuestion?.candidate?.questionKey
             val beforePhase = engine.state.interactionPhase
             publish(engine.checkAnswer())
             speakAfterMultipleChoiceCheck(beforePhase)
-            val afterKey = engine.state.currentQuestion?.candidate?.questionKey
-            if (beforeKey != null && beforeKey == afterKey) {
-                engine.statsSnapshot()[beforeKey]?.let { reviewStore.upsertStats(it) }
-            }
+            persistAnswerOutcome(beforeKey, beforePhase)
         }
     }
 
     fun skipQuestion() {
+        recordStudyInteraction()
         publish(engine.skipQuestion())
     }
 
     fun nextQuestion() {
+        recordStudyInteraction()
         publish(engine.advanceToNextQuestion())
     }
 
@@ -396,6 +439,88 @@ class ReviewViewModel(
                 persistedStats = persisted,
             ),
         )
+        beginStudySession()
+    }
+
+    private suspend fun beginStudySession() {
+        endStudySessionIfActive()
+        val startedAt = Instant.now().toString()
+        val sessionId = UUID.randomUUID().toString()
+        statsStore.startSession(
+            StudySession(
+                id = sessionId,
+                startedAt = startedAt,
+                endedAt = null,
+                activeMillis = 0L,
+                answeredCount = 0,
+                correctCount = 0,
+            ),
+        )
+        activeStudySessionId = sessionId
+        studySessionTracker.start()
+    }
+
+    private suspend fun endStudySessionIfActive() {
+        val sessionId = activeStudySessionId ?: return
+        val activeMillis = studySessionTracker.stop()
+        statsStore.updateSessionActiveMillis(sessionId, activeMillis)
+        statsStore.endSession(sessionId, Instant.now().toString())
+        activeStudySessionId = null
+    }
+
+    private suspend fun flushSessionActiveTime() {
+        val sessionId = activeStudySessionId ?: return
+        statsStore.updateSessionActiveMillis(sessionId, studySessionTracker.currentActiveMillis())
+    }
+
+    private fun recordStudyInteraction() {
+        if (activeStudySessionId == null) {
+            return
+        }
+        studySessionTracker.recordInteraction()
+    }
+
+    private suspend fun persistAnswerOutcome(
+        beforeKey: String?,
+        beforePhase: QuestionInteractionPhase,
+    ) {
+        if (beforePhase != QuestionInteractionPhase.ANSWERING || beforeKey == null) {
+            return
+        }
+        val afterKey = engine.state.currentQuestion?.candidate?.questionKey
+        if (beforeKey != afterKey) {
+            return
+        }
+        engine.statsSnapshot()[beforeKey]?.let { reviewStore.upsertStats(it) }
+        recordAttemptEvent(beforeKey)
+    }
+
+    private suspend fun recordAttemptEvent(questionKey: String) {
+        val sessionId = activeStudySessionId ?: return
+        val state = engine.state
+        val question = state.currentQuestion ?: return
+        val correct = state.lastCheckCorrect ?: return
+        if (state.interactionPhase != QuestionInteractionPhase.CHECKED &&
+            state.interactionPhase != QuestionInteractionPhase.WORD_DETAIL
+        ) {
+            return
+        }
+
+        flushSessionActiveTime()
+        val candidate = question.candidate
+        statsStore.insertAttemptEvent(
+            ReviewAttemptEvent(
+                id = UUID.randomUUID().toString(),
+                sessionId = sessionId,
+                questionKey = questionKey,
+                questionType = candidate.questionType.name,
+                lexemeId = candidate.lexemeId,
+                correct = correct,
+                answeredAt = Instant.now().toString(),
+                elapsedActiveMillis = studySessionTracker.currentActiveMillis(),
+            ),
+        )
+        statsStore.incrementSessionAnswer(sessionId, correct)
     }
 
     private fun publish(state: ReviewUiState) {
@@ -446,6 +571,7 @@ class ReviewViewModel(
                     ReviewViewModel(
                         vocabularyRepository = dependencies.vocabularyRepository,
                         reviewStore = dependencies.reviewStore,
+                        statsStore = dependencies.statsStore,
                         wordSpeech = dependencies.wordSpeech,
                         sessionUserId = dependencies::activeUserId,
                         canRefreshFromSupabase = dependencies::canRefreshFromSupabase,

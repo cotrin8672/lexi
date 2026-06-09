@@ -30,6 +30,7 @@ import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -43,6 +44,9 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
+import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import io.github.cotrin8672.lexi.review.AppDependencies
@@ -60,6 +64,7 @@ import io.github.cotrin8672.lexi.review.ui.theme.FeedbackCorrectPanel
 import io.github.cotrin8672.lexi.review.ui.theme.FeedbackIncorrectPanel
 import io.github.cotrin8672.lexi.review.ui.theme.IncorrectSoft
 import io.github.cotrin8672.lexi.review.sync.syncErrorUserMessage
+import io.github.cotrin8672.lexi.review.ui.components.HomeStatsOverview
 import io.github.cotrin8672.lexi.review.ui.theme.LexiReviewTheme
 import kotlinx.coroutines.delay
 
@@ -72,14 +77,47 @@ fun ReviewSessionScreen(
     viewModel: ReviewViewModel = viewModel(
         factory = ReviewViewModel.factory(dependencies),
     ),
+    statsViewModel: StatsViewModel = viewModel(
+        factory = StatsViewModel.factory(dependencies),
+    ),
 ) {
     val uiState by viewModel.uiState.collectAsStateWithLifecycle()
+    val statsUiState by statsViewModel.uiState.collectAsStateWithLifecycle()
+    val lifecycleOwner = LocalLifecycleOwner.current
+
+    DisposableEffect(lifecycleOwner, uiState.loadPhase) {
+        val observer = LifecycleEventObserver { _, event ->
+            if (uiState.loadPhase == SessionLoadPhase.READY) {
+                when (event) {
+                    Lifecycle.Event.ON_PAUSE -> viewModel.onPause()
+                    Lifecycle.Event.ON_RESUME -> viewModel.onResume()
+                    else -> Unit
+                }
+            }
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose {
+            lifecycleOwner.lifecycle.removeObserver(observer)
+        }
+    }
+
+    LaunchedEffect(uiState.loadPhase) {
+        when (uiState.loadPhase) {
+            SessionLoadPhase.MODE_SELECT,
+            SessionLoadPhase.STATS_DASHBOARD,
+            -> statsViewModel.refresh()
+            else -> Unit
+        }
+    }
+
     ReviewSessionContent(
         modifier = modifier,
         uiState = uiState,
+        statsUiState = statsUiState,
         sessionStore = dependencies.sessionStore,
         supabaseConfigured = dependencies.supabaseConfigured,
         onSelectMode = viewModel::startSession,
+        onOpenStatsDashboard = viewModel::openStatsDashboard,
         onOpenVocabularyList = viewModel::loadVocabularyList,
         onSyncVocabulary = viewModel::syncVocabulary,
         onSubmitOption = viewModel::submitOption,
@@ -91,6 +129,7 @@ fun ReviewSessionScreen(
         onNext = viewModel::nextQuestion,
         onRetryLoad = viewModel::retryLastLoad,
         onReturnToModeSelect = viewModel::returnToModeSelect,
+        onRefreshStats = statsViewModel::refresh,
         onSignedIn = viewModel::onSignedIn,
     )
 }
@@ -98,9 +137,11 @@ fun ReviewSessionScreen(
 @Composable
 private fun ReviewSessionContent(
     uiState: ReviewUiState,
+    statsUiState: StatsUiState,
     sessionStore: SupabaseSessionStore?,
     supabaseConfigured: Boolean,
     onSelectMode: (ReviewMode) -> Unit,
+    onOpenStatsDashboard: () -> Unit,
     onOpenVocabularyList: () -> Unit,
     onSyncVocabulary: () -> Unit,
     onSubmitOption: (String) -> Unit,
@@ -112,6 +153,7 @@ private fun ReviewSessionContent(
     onNext: () -> Unit,
     onRetryLoad: () -> Unit,
     onReturnToModeSelect: () -> Unit,
+    onRefreshStats: () -> Unit,
     onSignedIn: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
@@ -145,12 +187,15 @@ private fun ReviewSessionContent(
                 sessionStore = sessionStore,
                 isSignedIn = isSignedIn,
                 vocabularySyncInProgress = uiState.vocabularySyncInProgress,
-                onSelectMode = onSelectMode,
+                statsUiState = statsUiState,
+                onStartMixedRandom = { onSelectMode(ReviewMode.MIXED_RANDOM) },
+                onOpenStatsDashboard = onOpenStatsDashboard,
                 onOpenVocabularyList = onOpenVocabularyList,
                 onSyncVocabulary = onSyncVocabulary,
                 onSignedIn = {
                     isSignedIn = true
                     onSignedIn()
+                    onRefreshStats()
                 },
                 modifier = Modifier.fillMaxSize(),
             )
@@ -179,6 +224,12 @@ private fun ReviewSessionContent(
                 onCheck = onCheck,
                 onSkip = onSkip,
                 onNext = onNext,
+                modifier = Modifier.fillMaxSize(),
+            )
+            SessionLoadPhase.STATS_DASHBOARD -> StatsDashboardScreen(
+                uiState = statsUiState,
+                onBack = onReturnToModeSelect,
+                onRefresh = onRefreshStats,
                 modifier = Modifier.fillMaxSize(),
             )
                 }
@@ -240,69 +291,71 @@ private fun ModeSelectState(
     sessionStore: SupabaseSessionStore?,
     isSignedIn: Boolean,
     vocabularySyncInProgress: Boolean,
-    onSelectMode: (ReviewMode) -> Unit,
+    statsUiState: StatsUiState,
+    onStartMixedRandom: () -> Unit,
+    onOpenStatsDashboard: () -> Unit,
     onOpenVocabularyList: () -> Unit,
     onSyncVocabulary: () -> Unit,
     onSignedIn: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
-    Box(
-        modifier = modifier.padding(horizontal = 24.dp),
-        contentAlignment = Alignment.Center,
+    Column(
+        modifier = modifier
+            .padding(horizontal = 24.dp, vertical = 16.dp)
+            .verticalScroll(rememberScrollState()),
+        horizontalAlignment = Alignment.CenterHorizontally,
     ) {
-        Column(
-            horizontalAlignment = Alignment.CenterHorizontally,
-            modifier = Modifier.fillMaxWidth(),
+        Text(
+            text = "Lexi",
+            style = MaterialTheme.typography.displaySmall,
+            fontWeight = FontWeight.SemiBold,
+            textAlign = TextAlign.Center,
+        )
+        Spacer(modifier = Modifier.height(16.dp))
+        HomeStatsOverview(statsUiState = statsUiState)
+        Spacer(modifier = Modifier.height(24.dp))
+        Button(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(vertical = 4.dp),
+            onClick = onStartMixedRandom,
         ) {
-            Text(
-                text = "Lexi",
-                style = MaterialTheme.typography.displaySmall,
-                fontWeight = FontWeight.SemiBold,
-                textAlign = TextAlign.Center,
-            )
-            Spacer(modifier = Modifier.height(8.dp))
-            Text(
-                text = "Choose a review mode",
-                style = MaterialTheme.typography.bodyMedium,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                textAlign = TextAlign.Center,
-            )
-            Spacer(modifier = Modifier.height(32.dp))
-            ReviewMode.entries.forEach { mode ->
-                Button(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(vertical = 5.dp),
-                    onClick = { onSelectMode(mode) },
-                ) {
-                    Text(mode.label)
-                }
-            }
-            Spacer(modifier = Modifier.height(12.dp))
+            Text(ReviewMode.MIXED_RANDOM.label)
+        }
+        OutlinedButton(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(vertical = 4.dp),
+            onClick = onOpenVocabularyList,
+        ) {
+            Text("Word list")
+        }
+        OutlinedButton(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(vertical = 4.dp),
+            onClick = onOpenStatsDashboard,
+        ) {
+            Text("Statistics")
+        }
+        if (isSignedIn) {
             OutlinedButton(
-                modifier = Modifier.fillMaxWidth(),
-                onClick = onOpenVocabularyList,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(vertical = 4.dp),
+                enabled = !vocabularySyncInProgress,
+                onClick = onSyncVocabulary,
             ) {
-                Text("Word list")
+                Text(if (vocabularySyncInProgress) "Syncing…" else "Sync vocabulary")
             }
-            if (isSignedIn) {
-                Spacer(modifier = Modifier.height(8.dp))
-                OutlinedButton(
-                    modifier = Modifier.fillMaxWidth(),
-                    enabled = !vocabularySyncInProgress,
-                    onClick = onSyncVocabulary,
-                ) {
-                    Text(if (vocabularySyncInProgress) "Syncing…" else "Sync vocabulary")
-                }
-            }
-            if (!isSignedIn) {
-                Spacer(modifier = Modifier.height(8.dp))
-                GoogleSignInButton(
-                    sessionStore = sessionStore,
-                    modifier = Modifier.fillMaxWidth(),
-                    onSignedIn = onSignedIn,
-                )
-            }
+        }
+        if (!isSignedIn) {
+            Spacer(modifier = Modifier.height(4.dp))
+            GoogleSignInButton(
+                sessionStore = sessionStore,
+                modifier = Modifier.fillMaxWidth(),
+                onSignedIn = onSignedIn,
+            )
         }
     }
 }
@@ -794,9 +847,11 @@ private fun ReviewSessionPreview() {
                     ),
                 ),
             ),
+            statsUiState = StatsUiState.Loading,
             sessionStore = null,
             supabaseConfigured = false,
             onSelectMode = {},
+            onOpenStatsDashboard = {},
             onOpenVocabularyList = {},
             onSyncVocabulary = {},
             onSubmitOption = {},
@@ -808,6 +863,7 @@ private fun ReviewSessionPreview() {
             onNext = {},
             onRetryLoad = {},
             onReturnToModeSelect = {},
+            onRefreshStats = {},
             onSignedIn = {},
         )
     }
