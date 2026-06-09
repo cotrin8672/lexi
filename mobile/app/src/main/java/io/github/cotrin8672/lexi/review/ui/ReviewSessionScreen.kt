@@ -494,8 +494,7 @@ private fun ReadyState(
     val question = uiState.currentQuestion
     val questionKey = question?.candidate?.questionKey
     val showingWordDetail = uiState.interactionPhase == QuestionInteractionPhase.WORD_DETAIL
-    val canTapToContinue = uiState.interactionPhase == QuestionInteractionPhase.CHECKED ||
-        showingWordDetail
+    val canTapToContinue = uiState.interactionPhase == QuestionInteractionPhase.CHECKED
     val canTapEmptyToCheck = uiState.interactionPhase == QuestionInteractionPhase.ANSWERING &&
         uiState.canCheckAnswer() &&
         (question is RenderedQuestion.Reorder || question is RenderedQuestion.Inflection)
@@ -545,30 +544,34 @@ private fun ReadyState(
     }
 
     if (showingWordDetail) {
-        Box(modifier = modifier.fillMaxSize()) {
-            Column(
-                modifier = Modifier
-                    .fillMaxSize()
-                    .padding(horizontal = 20.dp, vertical = 16.dp),
-            ) {
-                VocabularySyncStatus(
-                    source = uiState.vocabularySource,
-                    wordCount = uiState.vocabularyCount,
-                    questionCount = uiState.totalCandidates,
-                )
-                Spacer(modifier = Modifier.height(8.dp))
-                uiState.wordDetailContext?.let { context ->
-                    WordDetailScreen(
-                        context = context,
-                        wasSkipped = wasSkipped,
-                        modifier = Modifier.weight(1f),
-                    )
-                } ?: Text(
-                    text = "Word details are unavailable.",
+        Column(
+            modifier = modifier
+                .fillMaxSize()
+                .padding(horizontal = 20.dp, vertical = 16.dp),
+        ) {
+            VocabularySyncStatus(
+                source = uiState.vocabularySource,
+                wordCount = uiState.vocabularyCount,
+                questionCount = uiState.totalCandidates,
+            )
+            Spacer(modifier = Modifier.height(8.dp))
+            uiState.wordDetailContext?.let { context ->
+                WordDetailScreen(
+                    context = context,
+                    wasSkipped = wasSkipped,
                     modifier = Modifier.weight(1f),
                 )
+            } ?: Text(
+                text = "Word details are unavailable.",
+                modifier = Modifier.weight(1f),
+            )
+            Spacer(modifier = Modifier.height(16.dp))
+            Button(
+                modifier = Modifier.fillMaxWidth(),
+                onClick = advanceOnce,
+            ) {
+                Text("次の問題へ")
             }
-            TapToContinueOverlay(onTap = advanceOnce)
         }
         return
     }

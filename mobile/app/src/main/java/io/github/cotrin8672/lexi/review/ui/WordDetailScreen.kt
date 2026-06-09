@@ -110,14 +110,7 @@ fun WordDetailScreen(
                 color = MaterialTheme.colorScheme.error,
             )
         }
-        Spacer(modifier = Modifier.height(24.dp))
-        Text(
-            text = "Tap to continue",
-            style = MaterialTheme.typography.labelMedium,
-            color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.8f),
-            modifier = Modifier.fillMaxWidth(),
-        )
-        Spacer(modifier = Modifier.height(8.dp))
+        Spacer(modifier = Modifier.height(16.dp))
     }
 }
 
