@@ -1,6 +1,7 @@
 package io.github.cotrin8672.lexi.review.ui
 
 import android.view.HapticFeedbackConstants
+import android.widget.Toast
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
@@ -15,6 +16,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
@@ -22,6 +24,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Surface
@@ -34,6 +37,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
@@ -55,6 +59,7 @@ import io.github.cotrin8672.lexi.review.ui.theme.CorrectSoft
 import io.github.cotrin8672.lexi.review.ui.theme.FeedbackCorrectPanel
 import io.github.cotrin8672.lexi.review.ui.theme.FeedbackIncorrectPanel
 import io.github.cotrin8672.lexi.review.ui.theme.IncorrectSoft
+import io.github.cotrin8672.lexi.review.sync.syncErrorUserMessage
 import io.github.cotrin8672.lexi.review.ui.theme.LexiReviewTheme
 import kotlinx.coroutines.delay
 
@@ -73,8 +78,10 @@ fun ReviewSessionScreen(
         modifier = modifier,
         uiState = uiState,
         sessionStore = dependencies.sessionStore,
+        supabaseConfigured = dependencies.supabaseConfigured,
         onSelectMode = viewModel::startSession,
         onOpenVocabularyList = viewModel::loadVocabularyList,
+        onSyncVocabulary = viewModel::syncVocabulary,
         onSubmitOption = viewModel::submitOption,
         onInflectionAnswerChange = viewModel::updateInflectionAnswer,
         onAddReorderToken = viewModel::addReorderToken,
@@ -92,8 +99,10 @@ fun ReviewSessionScreen(
 private fun ReviewSessionContent(
     uiState: ReviewUiState,
     sessionStore: SupabaseSessionStore?,
+    supabaseConfigured: Boolean,
     onSelectMode: (ReviewMode) -> Unit,
     onOpenVocabularyList: () -> Unit,
+    onSyncVocabulary: () -> Unit,
     onSubmitOption: (String) -> Unit,
     onInflectionAnswerChange: (String) -> Unit,
     onAddReorderToken: (Int) -> Unit,
@@ -106,17 +115,43 @@ private fun ReviewSessionContent(
     onSignedIn: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
+    val context = LocalContext.current
+    var isSignedIn by remember(sessionStore) {
+        mutableStateOf(!sessionStore?.readUserId().isNullOrBlank())
+    }
+    LaunchedEffect(uiState.syncToastNonce) {
+        uiState.syncToastMessage?.let { message ->
+            Toast.makeText(context, message, Toast.LENGTH_LONG).show()
+        }
+    }
     Surface(
         modifier = modifier,
         color = MaterialTheme.colorScheme.surface,
     ) {
-        when (uiState.loadPhase) {
+        Column(modifier = Modifier.fillMaxSize()) {
+            if (supabaseConfigured) {
+                VocabularySyncBar(
+                    visible = isSignedIn,
+                    isSyncing = uiState.vocabularySyncInProgress,
+                    cacheReady = uiState.vocabularyCacheReady,
+                    hasLocalCache = uiState.hasLocalCache,
+                    errorMessage = uiState.vocabularySyncError?.let(::syncErrorUserMessage),
+                    modifier = Modifier.fillMaxWidth(),
+                )
+            }
+            Box(modifier = Modifier.weight(1f)) {
+                when (uiState.loadPhase) {
             SessionLoadPhase.MODE_SELECT -> ModeSelectState(
-                uiState = uiState,
                 sessionStore = sessionStore,
+                isSignedIn = isSignedIn,
+                vocabularySyncInProgress = uiState.vocabularySyncInProgress,
                 onSelectMode = onSelectMode,
                 onOpenVocabularyList = onOpenVocabularyList,
-                onSignedIn = onSignedIn,
+                onSyncVocabulary = onSyncVocabulary,
+                onSignedIn = {
+                    isSignedIn = true
+                    onSignedIn()
+                },
                 modifier = Modifier.fillMaxSize(),
             )
             SessionLoadPhase.SYNCING_VOCABULARY -> SyncingVocabularyState(
@@ -146,23 +181,71 @@ private fun ReviewSessionContent(
                 onNext = onNext,
                 modifier = Modifier.fillMaxSize(),
             )
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun VocabularySyncBar(
+    visible: Boolean,
+    isSyncing: Boolean,
+    cacheReady: Boolean,
+    hasLocalCache: Boolean,
+    errorMessage: String?,
+    modifier: Modifier = Modifier,
+) {
+    if (!visible) {
+        return
+    }
+    Column(modifier = modifier) {
+        if (isSyncing) {
+            LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
+        }
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 16.dp, vertical = 10.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(10.dp),
+        ) {
+            if (isSyncing) {
+                CircularProgressIndicator(
+                    modifier = Modifier.size(18.dp),
+                    strokeWidth = 2.dp,
+                )
+            }
+            Text(
+                text = when {
+                    isSyncing -> "Syncing vocabulary…"
+                    errorMessage != null -> errorMessage
+                    cacheReady -> "Vocabulary synced and ready offline"
+                    hasLocalCache -> "Cached vocabulary available. Tap Sync to update."
+                    else -> "Tap Sync to download vocabulary."
+                },
+                style = MaterialTheme.typography.labelMedium,
+                color = if (errorMessage != null && !isSyncing) {
+                    MaterialTheme.colorScheme.error
+                } else {
+                    MaterialTheme.colorScheme.onSurfaceVariant
+                },
+            )
         }
     }
 }
 
 @Composable
 private fun ModeSelectState(
-    uiState: ReviewUiState,
     sessionStore: SupabaseSessionStore?,
+    isSignedIn: Boolean,
+    vocabularySyncInProgress: Boolean,
     onSelectMode: (ReviewMode) -> Unit,
     onOpenVocabularyList: () -> Unit,
+    onSyncVocabulary: () -> Unit,
     onSignedIn: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
-    var isSignedIn by remember(sessionStore) {
-        mutableStateOf(!sessionStore?.readUserId().isNullOrBlank())
-    }
-
     Box(
         modifier = modifier.padding(horizontal = 24.dp),
         contentAlignment = Alignment.Center,
@@ -184,23 +267,6 @@ private fun ModeSelectState(
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 textAlign = TextAlign.Center,
             )
-            if (uiState.vocabularySyncInProgress) {
-                Spacer(modifier = Modifier.height(8.dp))
-                Text(
-                    text = "Updating vocabulary in background…",
-                    style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    textAlign = TextAlign.Center,
-                )
-            } else if (uiState.vocabularyCacheReady) {
-                Spacer(modifier = Modifier.height(8.dp))
-                Text(
-                    text = "Vocabulary ready offline",
-                    style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    textAlign = TextAlign.Center,
-                )
-            }
             Spacer(modifier = Modifier.height(32.dp))
             ReviewMode.entries.forEach { mode ->
                 Button(
@@ -219,15 +285,22 @@ private fun ModeSelectState(
             ) {
                 Text("Word list")
             }
+            if (isSignedIn) {
+                Spacer(modifier = Modifier.height(8.dp))
+                OutlinedButton(
+                    modifier = Modifier.fillMaxWidth(),
+                    enabled = !vocabularySyncInProgress,
+                    onClick = onSyncVocabulary,
+                ) {
+                    Text(if (vocabularySyncInProgress) "Syncing…" else "Sync vocabulary")
+                }
+            }
             if (!isSignedIn) {
                 Spacer(modifier = Modifier.height(8.dp))
                 GoogleSignInButton(
                     sessionStore = sessionStore,
                     modifier = Modifier.fillMaxWidth(),
-                    onSignedIn = {
-                        isSignedIn = true
-                        onSignedIn()
-                    },
+                    onSignedIn = onSignedIn,
                 )
             }
         }
@@ -668,6 +741,7 @@ private fun ReviewSessionPreview() {
         ReviewSessionContent(
             uiState = ReviewUiState(
                 loadPhase = SessionLoadPhase.READY,
+                vocabularyCacheReady = true,
                 sessionQuestionNumber = 1,
                 totalCandidates = 12,
                 currentQuestion = RenderedQuestion.Meaning(
@@ -693,8 +767,10 @@ private fun ReviewSessionPreview() {
                 ),
             ),
             sessionStore = null,
+            supabaseConfigured = false,
             onSelectMode = {},
             onOpenVocabularyList = {},
+            onSyncVocabulary = {},
             onSubmitOption = {},
             onInflectionAnswerChange = {},
             onAddReorderToken = {},

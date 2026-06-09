@@ -80,7 +80,11 @@ data class ReviewUiState(
     val vocabularyList: List<VocabularyListItem> = emptyList(),
     val vocabularyCount: Int = 0,
     val vocabularySyncInProgress: Boolean = false,
+    val hasLocalCache: Boolean = false,
     val vocabularyCacheReady: Boolean = false,
+    val vocabularySyncError: String? = null,
+    val syncToastMessage: String? = null,
+    val syncToastNonce: Int = 0,
 ) {
     fun reorderAvailableTokens(): List<String> =
         availableReorderTokens(reorderBankOrder, reorderSelectedTokens)

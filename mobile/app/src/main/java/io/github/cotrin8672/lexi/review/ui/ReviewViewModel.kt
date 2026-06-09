@@ -20,6 +20,7 @@ import io.github.cotrin8672.lexi.review.speech.speakableHeadword
 import io.github.cotrin8672.lexi.review.storage.VocabularyRepository
 import io.github.cotrin8672.lexi.review.storage.VocabularySource
 import io.github.cotrin8672.lexi.review.sync.VocabularySyncCoordinator
+import io.github.cotrin8672.lexi.review.sync.syncErrorUserMessage
 import io.github.cotrin8672.lexi.review.toVocabularyListItems
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -45,20 +46,42 @@ class ReviewViewModel(
 
     private var pendingRetryMode: ReviewMode? = null
     private var pendingVocabularyList = false
+    private var lastToastedSyncError: String? = null
 
     init {
         vocabularySync?.let { coordinator ->
             viewModelScope.launch {
                 coordinator.status.collect { syncStatus ->
+                    val shouldToast = syncStatus.lastError != null &&
+                        !syncStatus.isSyncing &&
+                        syncStatus.lastError != lastToastedSyncError
+                    if (shouldToast) {
+                        lastToastedSyncError = syncStatus.lastError
+                    }
+                    if (syncStatus.lastError == null) {
+                        lastToastedSyncError = null
+                    }
                     _uiState.update { current ->
-                        if (current.loadPhase != SessionLoadPhase.MODE_SELECT) {
-                            current
-                        } else {
-                            current.copy(
-                                vocabularySyncInProgress = syncStatus.isSyncing,
-                                vocabularyCacheReady = syncStatus.cacheReady,
-                            )
-                        }
+                        current.copy(
+                            vocabularySyncInProgress = syncStatus.isSyncing,
+                            hasLocalCache = syncStatus.hasLocalCache,
+                            vocabularyCacheReady = syncStatus.cacheReady,
+                            vocabularySyncError = if (!syncStatus.isSyncing) {
+                                syncStatus.lastError
+                            } else {
+                                null
+                            },
+                            syncToastMessage = if (shouldToast) {
+                                syncErrorUserMessage(syncStatus.lastError!!)
+                            } else {
+                                current.syncToastMessage
+                            },
+                            syncToastNonce = if (shouldToast) {
+                                current.syncToastNonce + 1
+                            } else {
+                                current.syncToastNonce
+                            },
+                        )
                     }
                 }
             }
@@ -71,16 +94,31 @@ class ReviewViewModel(
         vocabularySync?.scheduleSync(userId)
     }
 
+    fun syncVocabulary() {
+        val userId = sessionUserId()?.takeIf { it.isNotBlank() }
+        if (userId == null) {
+            showSyncToast("Sign in to sync vocabulary.")
+            return
+        }
+        if (!canRefreshFromSupabase()) {
+            showSyncToast("Supabase sync is not available. Check sign-in and app configuration.")
+            return
+        }
+        vocabularySync?.scheduleSync(userId)
+    }
+
     fun startSession(mode: ReviewMode) {
         pendingRetryMode = mode
         pendingVocabularyList = false
         viewModelScope.launch {
             val userId = sessionUserId()?.takeIf { it.isNotBlank() }
             if (userId == null) {
-                _uiState.value = ReviewUiState(
-                    loadPhase = SessionLoadPhase.ERROR,
-                    reviewMode = mode,
-                    errorMessage = "No account on this device. Sign in to sync vocabulary.",
+                setUiState(
+                    ReviewUiState(
+                        loadPhase = SessionLoadPhase.ERROR,
+                        reviewMode = mode,
+                        errorMessage = "No account on this device. Sign in to sync vocabulary.",
+                    ),
                 )
                 return@launch
             }
@@ -94,9 +132,11 @@ class ReviewViewModel(
         viewModelScope.launch {
             val userId = sessionUserId()?.takeIf { it.isNotBlank() }
             if (userId == null) {
-                _uiState.value = ReviewUiState(
-                    loadPhase = SessionLoadPhase.ERROR,
-                    errorMessage = "No account on this device. Sign in to sync vocabulary.",
+                setUiState(
+                    ReviewUiState(
+                        loadPhase = SessionLoadPhase.ERROR,
+                        errorMessage = "No account on this device. Sign in to sync vocabulary.",
+                    ),
                 )
                 return@launch
             }
@@ -120,10 +160,12 @@ class ReviewViewModel(
                     )
                 }
                 is VocabularyLoadResult.Failure -> {
-                    _uiState.value = ReviewUiState(
-                        loadPhase = SessionLoadPhase.ERROR,
-                        reviewMode = ReviewMode.MIXED_RANDOM,
-                        errorMessage = result.message,
+                    setUiState(
+                        ReviewUiState(
+                            loadPhase = SessionLoadPhase.ERROR,
+                            reviewMode = ReviewMode.MIXED_RANDOM,
+                            errorMessage = result.message,
+                        ),
                     )
                 }
             }
@@ -145,7 +187,9 @@ class ReviewViewModel(
         _uiState.value = ReviewUiState(
             loadPhase = SessionLoadPhase.MODE_SELECT,
             vocabularySyncInProgress = syncStatus?.isSyncing == true,
+            hasLocalCache = syncStatus?.hasLocalCache == true,
             vocabularyCacheReady = syncStatus?.cacheReady == true,
+            vocabularySyncError = syncStatus?.lastError,
         )
     }
 
@@ -163,18 +207,22 @@ class ReviewViewModel(
         }
         viewModelScope.launch {
             val mode = _uiState.value.reviewMode ?: ReviewMode.MIXED_RANDOM
-            _uiState.value = ReviewUiState(
-                loadPhase = SessionLoadPhase.SYNCING_VOCABULARY,
-                reviewMode = mode,
+            setUiState(
+                ReviewUiState(
+                    loadPhase = SessionLoadPhase.SYNCING_VOCABULARY,
+                    reviewMode = mode,
+                ),
             )
             vocabularySync?.syncNow(resolvedUserId)
             when (val result = loadSessionVocabulary(vocabularyRepository, resolvedUserId)) {
                 is VocabularyLoadResult.Success -> publishSession(mode, result)
                 is VocabularyLoadResult.Failure -> {
-                    _uiState.value = ReviewUiState(
-                        loadPhase = SessionLoadPhase.ERROR,
-                        reviewMode = mode,
-                        errorMessage = vocabularySync?.status?.value?.lastError ?: result.message,
+                    setUiState(
+                        ReviewUiState(
+                            loadPhase = SessionLoadPhase.ERROR,
+                            reviewMode = mode,
+                            errorMessage = vocabularySync?.status?.value?.lastError ?: result.message,
+                        ),
                     )
                 }
             }
@@ -248,11 +296,13 @@ class ReviewViewModel(
     private suspend fun loadAndShowVocabularyList(userId: String) {
         when (val result = loadSessionVocabulary(vocabularyRepository, userId)) {
             is VocabularyLoadResult.Success -> {
-                _uiState.value = ReviewUiState(
-                    loadPhase = SessionLoadPhase.VOCABULARY_LIST,
-                    vocabularySource = result.source,
-                    vocabularyList = result.cards.toVocabularyListItems(),
-                    vocabularyCount = result.cards.size,
+                setUiState(
+                    ReviewUiState(
+                        loadPhase = SessionLoadPhase.VOCABULARY_LIST,
+                        vocabularySource = result.source,
+                        vocabularyList = result.cards.toVocabularyListItems(),
+                        vocabularyCount = result.cards.size,
+                    ),
                 )
             }
             is VocabularyLoadResult.Failure -> waitForSyncAndShowVocabularyList(userId, result.message)
@@ -265,27 +315,33 @@ class ReviewViewModel(
         cacheMessage: String,
     ) {
         if (!canRefreshFromSupabase() || vocabularySync == null) {
-            _uiState.value = ReviewUiState(
-                loadPhase = SessionLoadPhase.ERROR,
-                reviewMode = mode,
-                errorMessage = cacheMessage,
+            setUiState(
+                ReviewUiState(
+                    loadPhase = SessionLoadPhase.ERROR,
+                    reviewMode = mode,
+                    errorMessage = cacheMessage,
+                ),
             )
             return
         }
 
-        _uiState.value = ReviewUiState(
-            loadPhase = SessionLoadPhase.SYNCING_VOCABULARY,
-            reviewMode = mode,
+        setUiState(
+            ReviewUiState(
+                loadPhase = SessionLoadPhase.SYNCING_VOCABULARY,
+                reviewMode = mode,
+            ),
         )
         vocabularySync.syncNow(userId)
 
         when (val result = loadSessionVocabulary(vocabularyRepository, userId)) {
             is VocabularyLoadResult.Success -> publishSession(mode, result)
             is VocabularyLoadResult.Failure -> {
-                _uiState.value = ReviewUiState(
-                    loadPhase = SessionLoadPhase.ERROR,
-                    reviewMode = mode,
-                    errorMessage = vocabularySync.status.value.lastError ?: result.message,
+                setUiState(
+                    ReviewUiState(
+                        loadPhase = SessionLoadPhase.ERROR,
+                        reviewMode = mode,
+                        errorMessage = vocabularySync.status.value.lastError ?: result.message,
+                    ),
                 )
             }
         }
@@ -293,29 +349,35 @@ class ReviewViewModel(
 
     private suspend fun waitForSyncAndShowVocabularyList(userId: String, cacheMessage: String) {
         if (!canRefreshFromSupabase() || vocabularySync == null) {
-            _uiState.value = ReviewUiState(
-                loadPhase = SessionLoadPhase.ERROR,
-                errorMessage = cacheMessage,
+            setUiState(
+                ReviewUiState(
+                    loadPhase = SessionLoadPhase.ERROR,
+                    errorMessage = cacheMessage,
+                ),
             )
             return
         }
 
-        _uiState.value = ReviewUiState(loadPhase = SessionLoadPhase.SYNCING_VOCABULARY)
+        setUiState(ReviewUiState(loadPhase = SessionLoadPhase.SYNCING_VOCABULARY))
         vocabularySync.syncNow(userId)
 
         when (val result = loadSessionVocabulary(vocabularyRepository, userId)) {
             is VocabularyLoadResult.Success -> {
-                _uiState.value = ReviewUiState(
-                    loadPhase = SessionLoadPhase.VOCABULARY_LIST,
-                    vocabularySource = result.source,
-                    vocabularyList = result.cards.toVocabularyListItems(),
-                    vocabularyCount = result.cards.size,
+                setUiState(
+                    ReviewUiState(
+                        loadPhase = SessionLoadPhase.VOCABULARY_LIST,
+                        vocabularySource = result.source,
+                        vocabularyList = result.cards.toVocabularyListItems(),
+                        vocabularyCount = result.cards.size,
+                    ),
                 )
             }
             is VocabularyLoadResult.Failure -> {
-                _uiState.value = ReviewUiState(
-                    loadPhase = SessionLoadPhase.ERROR,
-                    errorMessage = vocabularySync.status.value.lastError ?: result.message,
+                setUiState(
+                    ReviewUiState(
+                        loadPhase = SessionLoadPhase.ERROR,
+                        errorMessage = vocabularySync.status.value.lastError ?: result.message,
+                    ),
                 )
             }
         }
@@ -337,7 +399,29 @@ class ReviewViewModel(
     }
 
     private fun publish(state: ReviewUiState) {
-        _uiState.update { state }
+        _uiState.update { current -> state.preserveSyncFrom(current) }
+    }
+
+    private fun setUiState(state: ReviewUiState) {
+        _uiState.update { current -> state.preserveSyncFrom(current) }
+    }
+
+    private fun ReviewUiState.preserveSyncFrom(source: ReviewUiState): ReviewUiState = copy(
+        vocabularySyncInProgress = source.vocabularySyncInProgress,
+        hasLocalCache = source.hasLocalCache,
+        vocabularyCacheReady = source.vocabularyCacheReady,
+        vocabularySyncError = source.vocabularySyncError,
+        syncToastMessage = source.syncToastMessage,
+        syncToastNonce = source.syncToastNonce,
+    )
+
+    private fun showSyncToast(message: String) {
+        _uiState.update { current ->
+            current.copy(
+                syncToastMessage = message,
+                syncToastNonce = current.syncToastNonce + 1,
+            )
+        }
     }
 
     private fun speakAfterMultipleChoiceCheck(beforePhase: QuestionInteractionPhase) {

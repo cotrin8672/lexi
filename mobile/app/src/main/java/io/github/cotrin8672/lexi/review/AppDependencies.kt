@@ -105,7 +105,7 @@ class AppDependencies(
                 config = mobileConfig(),
                 cacheDao = database.vocabularyCacheDao(),
                 syncStateDao = database.vocabularySyncStateDao(),
-                sessionProvider = { sessionStore.read() },
+                sessionProvider = { sessionStore.sessionForSync() },
             )
         }
 

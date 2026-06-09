@@ -15,6 +15,9 @@ import kotlinx.coroutines.sync.withLock
 
 data class VocabularySyncStatus(
     val isSyncing: Boolean = false,
+    /** Local Room cache exists (may be stale until a sync succeeds). */
+    val hasLocalCache: Boolean = false,
+    /** Last Supabase sync attempt completed successfully. */
     val cacheReady: Boolean = false,
     val lastError: String? = null,
 )
@@ -38,8 +41,9 @@ class VocabularySyncCoordinator(
         scope.launch {
             when (repository.loadCachedCards(userId)) {
                 is VocabularyLoadResult.Success ->
-                    _status.update { it.copy(cacheReady = true, lastError = null) }
-                is VocabularyLoadResult.Failure -> Unit
+                    _status.update { it.copy(hasLocalCache = true) }
+                is VocabularyLoadResult.Failure ->
+                    _status.update { it.copy(hasLocalCache = false) }
             }
         }
     }
@@ -72,6 +76,7 @@ class VocabularySyncCoordinator(
                     _status.update {
                         it.copy(
                             isSyncing = false,
+                            hasLocalCache = true,
                             cacheReady = true,
                             lastError = null,
                         )

@@ -39,6 +39,17 @@ class SupabaseSessionStore(
         )
     }
 
+    /**
+     * Waits for auth storage init and refreshes the session before REST sync calls.
+     * supabase-kt auto-refreshes for its own clients; raw HttpURLConnection sync
+     * still needs an explicit refresh here.
+     */
+    suspend fun sessionForSync(): SupabaseSession? {
+        client.auth.awaitInitialization()
+        runCatching { client.auth.refreshCurrentSession() }
+        return read()
+    }
+
     companion object {
         fun createClient(config: SupabaseMobileConfig): SupabaseSessionStore {
             val nativeGoogleSignInEnabled = config.googleWebClientId.isNotBlank()
