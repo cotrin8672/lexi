@@ -4,15 +4,22 @@ import io.github.cotrin8672.lexi.review.schema.ActiveVocabularyCard
 import io.github.cotrin8672.lexi.review.storage.VocabularySource
 
 data class VocabularyListItem(
+    val lexemeId: String,
+    val snapshotId: String,
     val headword: String,
     val meanings: String,
     val partOfSpeech: String? = null,
 )
 
 fun List<ActiveVocabularyCard>.toVocabularyListItems(): List<VocabularyListItem> =
-    sortedBy { it.content.headword.lowercase() }
+    groupBy { it.lexemeId }
+        .values
+        .map { cards -> cards.maxBy { card -> card.snapshot.createdAt } }
+        .sortedBy { it.content.headword.lowercase() }
         .map { card ->
             VocabularyListItem(
+                lexemeId = card.lexemeId,
+                snapshotId = card.snapshot.id,
                 headword = card.content.headword,
                 meanings = card.content.translations
                     .take(3)
