@@ -615,6 +615,28 @@ fn load_cached_word_study_from_connection(
     lookup_key: &str,
     result_language: &str,
 ) -> Result<Option<LexiResultV1>, AppError> {
+    if let Some(result) = load_cached_word_study_from_connection_with_language(
+        connection,
+        lookup_key,
+        result_language,
+    )? {
+        return Ok(Some(result));
+    }
+
+    // Cards saved before the result_language cache-key fix were stored as "en"
+    // while settings used "ja".
+    if result_language == "ja" {
+        return load_cached_word_study_from_connection_with_language(connection, lookup_key, "en");
+    }
+
+    Ok(None)
+}
+
+fn load_cached_word_study_from_connection_with_language(
+    connection: &Connection,
+    lookup_key: &str,
+    result_language: &str,
+) -> Result<Option<LexiResultV1>, AppError> {
     let user_id = effective_user_id();
     let matches = query_lexeme_form_matches(
         connection,
@@ -1880,7 +1902,8 @@ mod tests {
         apply_pulled_card_snapshot_to_connection, effective_user_id, ensure_lexeme_forms,
         ensure_lexeme_forms_from_content_json, initialize_schema,
         load_cached_japanese_word_candidates_from_connection,
-        load_cached_word_study_from_connection, local_mutation_already_acknowledged,
+        load_cached_word_study_from_connection,
+        load_cached_word_study_from_connection_with_language, local_mutation_already_acknowledged,
         normalize_lookup_key, pulled_change_already_applied, repair_lexeme_forms_for_active_cards,
         save_japanese_word_candidates_result_to_connection, save_word_study_result_to_connection,
         sync_scope_key, EnsureLexemeFormsOptions, PulledChange,
@@ -2165,6 +2188,130 @@ mod tests {
             relations_for_form_key(&connection, "went"),
             vec![("go".to_string(), "irregular".to_string())]
         );
+    }
+
+    #[test]
+    fn loads_legacy_word_study_cache_saved_with_en_result_language() {
+        let mut connection = Connection::open_in_memory().expect("memory sqlite");
+        initialize_schema(&connection).expect("schema");
+        let (mut result, selected_text) =
+            word_study_result("play", Some("playing"), vec![], Some("動詞"));
+        result.result_language = "en".to_string();
+        save(&mut connection, &result, &selected_text);
+
+        let cached = load_cached_word_study_from_connection(&connection, "playing", "ja")
+            .expect("cache lookup")
+            .expect("legacy cache hit");
+
+        assert_eq!(cached.headword, "play");
+    }
+
+    #[test]
+    fn word_study_save_persists_result_language_for_cache_key() {
+        let mut connection = Connection::open_in_memory().expect("memory sqlite");
+        initialize_schema(&connection).expect("schema");
+        let (result, selected_text) = word_study_result("play", Some("play"), vec![], Some("動詞"));
+        save(&mut connection, &result, &selected_text);
+
+        let result_language: String = connection
+            .query_row(
+                "select result_language from card_snapshots where active = 1",
+                [],
+                |row| row.get(0),
+            )
+            .expect("snapshot result language");
+        assert_eq!(result_language, "ja");
+    }
+
+    #[test]
+    fn word_study_cache_misses_for_unmatched_result_language() {
+        let mut connection = Connection::open_in_memory().expect("memory sqlite");
+        initialize_schema(&connection).expect("schema");
+        let (result, selected_text) = word_study_result("play", Some("play"), vec![], Some("動詞"));
+        save(&mut connection, &result, &selected_text);
+
+        assert!(
+            load_cached_word_study_from_connection(&connection, "play", "ko")
+                .expect("cache lookup")
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn word_study_cache_keeps_separate_snapshots_per_result_language() {
+        let mut connection = Connection::open_in_memory().expect("memory sqlite");
+        initialize_schema(&connection).expect("schema");
+
+        let (mut ja_result, selected_text) =
+            word_study_result("play", Some("play"), vec![], Some("動詞"));
+        ja_result.translations[0].text = "日本語".to_string();
+        save(&mut connection, &ja_result, &selected_text);
+
+        let (mut en_result, _) = word_study_result("play", Some("play"), vec![], Some("動詞"));
+        en_result.result_language = "en".to_string();
+        en_result.translations[0].text = "English gloss".to_string();
+        save(&mut connection, &en_result, &selected_text);
+
+        let ja_cached = load_cached_word_study_from_connection(&connection, "play", "ja")
+            .expect("ja lookup")
+            .expect("ja cache");
+        let en_cached = load_cached_word_study_from_connection(&connection, "play", "en")
+            .expect("en lookup")
+            .expect("en cache");
+
+        assert_eq!(ja_cached.translations[0].text, "日本語");
+        assert_eq!(en_cached.translations[0].text, "English gloss");
+    }
+
+    #[test]
+    fn legacy_word_study_cache_fallback_only_applies_from_ja_to_en() {
+        let mut connection = Connection::open_in_memory().expect("memory sqlite");
+        initialize_schema(&connection).expect("schema");
+        let (mut result, selected_text) =
+            word_study_result("play", Some("play"), vec![], Some("動詞"));
+        result.result_language = "en".to_string();
+        save(&mut connection, &result, &selected_text);
+
+        assert!(
+            load_cached_word_study_from_connection_with_language(&connection, "play", "ja")
+                .expect("direct ja lookup")
+                .is_none()
+        );
+        assert!(
+            load_cached_word_study_from_connection_with_language(&connection, "play", "ko")
+                .expect("direct ko lookup")
+                .is_none()
+        );
+        assert!(
+            load_cached_word_study_from_connection(&connection, "play", "ja")
+                .expect("fallback ja lookup")
+                .is_some()
+        );
+        assert!(
+            load_cached_word_study_from_connection(&connection, "play", "en")
+                .expect("direct en lookup")
+                .is_some()
+        );
+    }
+
+    #[test]
+    fn repeated_word_study_lookup_returns_same_cached_card() {
+        let mut connection = Connection::open_in_memory().expect("memory sqlite");
+        initialize_schema(&connection).expect("schema");
+        let (result, selected_text) =
+            word_study_result("play", Some("playing"), vec![], Some("動詞"));
+        save(&mut connection, &result, &selected_text);
+
+        let first = load_cached_word_study_from_connection(&connection, "playing", "ja")
+            .expect("first lookup")
+            .expect("first cache hit");
+        let second = load_cached_word_study_from_connection(&connection, "playing", "ja")
+            .expect("second lookup")
+            .expect("second cache hit");
+
+        assert_eq!(first.headword, second.headword);
+        assert_eq!(first.translations, second.translations);
+        assert_eq!(first.nuance, second.nuance);
     }
 
     /// User flow: search "playing" once (LLM returns headword "play"), then reuse cache

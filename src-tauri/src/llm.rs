@@ -26,6 +26,15 @@ const MAX_OUTPUT_TOKENS: u32 = 2048;
 const TRANSFORM_EVENT: &str = "lexi:transform";
 static NEXT_REQUEST_ID: AtomicU64 = AtomicU64::new(1);
 
+fn finalize_word_study_result(
+    mut result: LexiResultV1,
+    result_language: &str,
+) -> LexiResultV1 {
+    result.result_language = result_language.trim().to_string();
+    result.source_language = "en".to_string();
+    result
+}
+
 fn persist_word_study_result(
     app: &AppHandle,
     result: &LexiResultV1,
@@ -740,7 +749,7 @@ async fn run_transform_stream_for_capture(
             return Ok(());
         }
     } else if let Ok(Some(result)) =
-        vocabulary::load_word_study(&app, &request.selected_text, &settings.result_language).await
+        vocabulary::load_word_study(&app, &request.selected_text, &request.result_language).await
     {
         let _ = app.emit(
             TRANSFORM_EVENT,
@@ -763,6 +772,7 @@ async fn run_transform_stream_for_capture(
             settings.provider,
             &settings.model,
             &request.selected_text,
+            &request.result_language,
         );
     }
 
@@ -832,7 +842,10 @@ async fn run_transform_stream_for_capture(
             );
         }
         TransformMode::WordStudy => {
-            let result = parse_lexi_result_v1(&raw_json)?;
+            let result = finalize_word_study_result(
+                parse_lexi_result_v1(&raw_json)?,
+                &request.result_language,
+            );
             persist_word_study_result(
                 &app,
                 &result,
@@ -863,9 +876,11 @@ fn emit_mock_stream_result(
     provider: ProviderKind,
     model: &str,
     selected_text: &str,
+    result_language: &str,
 ) -> Result<(), AppError> {
     match result {
         LexiResult::WordStudy(word_result) => {
+            let word_result = finalize_word_study_result(word_result, result_language);
             let partial = LexiPartialResult::from_word_study_result(&word_result);
             let _ = app.emit(
                 TRANSFORM_EVENT,
@@ -996,7 +1011,7 @@ pub async fn run_transform(
             });
         }
     } else if let Ok(Some(result)) =
-        vocabulary::load_word_study(&app, &request.selected_text, &settings.result_language).await
+        vocabulary::load_word_study(&app, &request.selected_text, &request.result_language).await
     {
         return Ok(TransformResult {
             result: LexiResult::WordStudy(result),
@@ -1010,7 +1025,7 @@ pub async fn run_transform(
         match &result {
             LexiResult::WordStudy(word_result) => persist_word_study_result(
                 &app,
-                word_result,
+                &finalize_word_study_result(word_result.clone(), &request.result_language),
                 settings.provider,
                 &settings.model,
                 &request.selected_text,
@@ -1099,7 +1114,8 @@ fn build_word_study_prompt(request: &TransformRequest) -> String {
 Hard requirements:
 - Output must match schemaVersion "{schema_version}" and mode "word-study".
 - Do not include markdown, prose outside JSON, comments, or code fences.
-- Use resultLanguage "{result_language}" for all explanations and Japanese meaning fields.
+- sourceLanguage must be "en" and resultLanguage must be "{result_language}".
+- Use resultLanguage "{result_language}" for all explanations and meaning fields.
 - Keep the result compact enough for a small desktop popup.
 - If the selection is a single inflected word with no independent dictionary meaning, set headword to its dictionary/base form, not the selected surface form. Examples: went -> go, ran -> run, playing -> play, studied -> study, quantified -> quantify.
 - If the selected form is also a standalone dictionary word (for example saw as a tool, left as a direction), keep that form as headword and return dictionary senses for that headword. Mention ambiguity in warnings when useful.
@@ -1346,7 +1362,7 @@ fn is_openai_chat_model(id: &str) -> bool {
     id.starts_with("gpt-") || id.starts_with("o")
 }
 
-fn lexi_result_schema() -> Value {
+fn lexi_result_schema(result_language: &str) -> Value {
     json!({
         "type": "object",
         "additionalProperties": false,
@@ -1366,8 +1382,8 @@ fn lexi_result_schema() -> Value {
         "properties": {
             "schemaVersion": { "type": "string", "enum": [LEXI_RESULT_V1_SCHEMA_VERSION] },
             "mode": { "type": "string", "enum": ["word-study"] },
-            "sourceLanguage": { "type": "string", "enum": ["ja"] },
-            "resultLanguage": { "type": "string", "enum": ["en"] },
+            "sourceLanguage": { "type": "string", "enum": ["en"] },
+            "resultLanguage": { "type": "string", "enum": [result_language] },
             "headword": { "type": "string" },
             "inflections": { "type": "array", "minItems": 0, "maxItems": 3, "items": { "$ref": "#/$defs/inflection" } },
             "translations": { "type": "array", "minItems": 1, "maxItems": 3, "items": { "$ref": "#/$defs/translation" } },
@@ -1461,7 +1477,7 @@ async fn call_openai_stream(
             "You return only strict, compact JSON for Lexi's word-study schema. Keep every field short and contrastive.",
             build_word_study_prompt(request),
             "lexi_result_v1",
-            lexi_result_schema(),
+            lexi_result_schema(&request.result_language),
         ),
         TransformMode::TextTranslation => unreachable!("text translation uses DeepL"),
     };
@@ -1533,7 +1549,7 @@ async fn call_gemini_stream(
         ),
         TransformMode::WordStudy => (
             build_word_study_prompt(request),
-            gemini_lexi_result_schema(),
+            gemini_lexi_result_schema(&request.result_language),
         ),
         TransformMode::TextTranslation => unreachable!("text translation uses DeepL"),
     };
@@ -1752,7 +1768,7 @@ async fn call_openai(
                 "json_schema": {
                     "name": "lexi_result_v1",
                     "strict": true,
-                    "schema": lexi_result_schema()
+                    "schema": lexi_result_schema(&request.result_language)
                 }
             }
         }))
@@ -1781,7 +1797,10 @@ async fn call_openai(
         .map(|choice| choice.message.content.as_str())
         .ok_or_else(|| AppError::invalid_model_output("OpenAI response had no choices"))?;
 
-    parse_lexi_result_v1(content)
+    Ok(finalize_word_study_result(
+        parse_lexi_result_v1(content)?,
+        &request.result_language,
+    ))
 }
 
 async fn call_openai_japanese_word_candidates(
@@ -1866,7 +1885,7 @@ async fn call_gemini(
                 "temperature": 0.2,
                 "maxOutputTokens": MAX_OUTPUT_TOKENS,
                 "responseMimeType": "application/json",
-                "responseSchema": gemini_lexi_result_schema()
+                "responseSchema": gemini_lexi_result_schema(&request.result_language)
             }
         }))
         .send()
@@ -1891,7 +1910,10 @@ async fn call_gemini(
         .and_then(gemini_candidate_text)
         .ok_or_else(|| AppError::invalid_model_output("Gemini response had no text part"))?;
 
-    parse_lexi_result_v1(content)
+    Ok(finalize_word_study_result(
+        parse_lexi_result_v1(content)?,
+        &request.result_language,
+    ))
 }
 
 async fn call_gemini_japanese_word_candidates(
@@ -2017,7 +2039,7 @@ fn deepl_translate_url(api_key: &str) -> &'static str {
     }
 }
 
-fn gemini_lexi_result_schema() -> Value {
+fn gemini_lexi_result_schema(result_language: &str) -> Value {
     json!({
         "type": "OBJECT",
         "required": [
@@ -2036,8 +2058,8 @@ fn gemini_lexi_result_schema() -> Value {
         "properties": {
             "schemaVersion": { "type": "STRING", "enum": [LEXI_RESULT_V1_SCHEMA_VERSION] },
             "mode": { "type": "STRING", "enum": ["word-study"] },
-            "sourceLanguage": { "type": "STRING", "enum": ["ja"] },
-            "resultLanguage": { "type": "STRING", "enum": ["en"] },
+            "sourceLanguage": { "type": "STRING", "enum": ["en"] },
+            "resultLanguage": { "type": "STRING", "enum": [result_language] },
             "headword": { "type": "STRING" },
             "inflections": {
                 "type": "ARRAY",
@@ -2498,12 +2520,16 @@ struct DeepLTranslation {
 mod tests {
     use super::{
         build_japanese_word_candidates_prompt, build_word_study_prompt, classify_transform_mode,
-        gemini_lexi_result_schema, lexi_result_schema, mock_headword, mock_inflections,
-        parse_gemini_stream_text, parse_openai_stream_text, parse_sse_event_text,
+        finalize_word_study_result, gemini_lexi_result_schema, lexi_result_schema, mock_headword,
+        mock_inflections, parse_gemini_stream_text, parse_openai_stream_text, parse_sse_event_text,
         partial_from_json_fragment, pop_sse_event, provider_finish_reason_indicates_truncation,
         result_language_for_mode, selected_text_preview, sse_data_payload, TransformMode,
+        TransformRequest,
     };
-    use crate::schema::CandidateConfidence;
+    use crate::schema::{
+        parse_lexi_result_v1, CandidateConfidence, ExampleSentence, Idiom, Inflection,
+        LexiResultV1, RelatedWord, Translation, LEXI_RESULT_V1_SCHEMA_VERSION,
+    };
 
     #[test]
     fn japanese_word_candidates_force_english_result_language() {
@@ -2519,6 +2545,105 @@ mod tests {
             result_language_for_mode("ja", TransformMode::TextTranslation),
             "ja"
         );
+    }
+
+    fn sample_word_study_result(result_language: &str) -> LexiResultV1 {
+        LexiResultV1 {
+            schema_version: LEXI_RESULT_V1_SCHEMA_VERSION.to_string(),
+            mode: "word-study".to_string(),
+            source_language: "ja".to_string(),
+            result_language: result_language.to_string(),
+            headword: "play".to_string(),
+            inflections: vec![],
+            translations: vec![Translation {
+                text: "遊ぶ".to_string(),
+                note: Some("動詞".to_string()),
+                example: ExampleSentence {
+                    sentence: "They play outside.".to_string(),
+                    japanese: "彼らは外で遊ぶ。".to_string(),
+                },
+                sense_kind: None,
+                base_word: None,
+            }],
+            nuance: "テスト用の説明。".to_string(),
+            synonyms: vec![],
+            idioms: vec![],
+            warnings: vec![],
+        }
+    }
+
+    #[test]
+    fn finalize_word_study_result_aligns_request_result_language() {
+        let result = finalize_word_study_result(sample_word_study_result("en"), "ja");
+
+        assert_eq!(result.result_language, "ja");
+        assert_eq!(result.source_language, "en");
+    }
+
+    #[test]
+    fn finalize_word_study_result_fixes_parsed_provider_output() {
+        let raw_json = format!(
+            r#"{{
+              "schemaVersion": "{LEXI_RESULT_V1_SCHEMA_VERSION}",
+              "mode": "word-study",
+              "sourceLanguage": "ja",
+              "resultLanguage": "en",
+              "headword": "play",
+              "inflections": [],
+              "translations": [{{
+                "text": "遊ぶ",
+                "note": "動詞",
+                "example": {{
+                  "sentence": "They play outside.",
+                  "japanese": "彼らは外で遊ぶ。"
+                }}
+              }}],
+              "nuance": "テスト用の説明。",
+              "synonyms": [],
+              "idioms": [],
+              "warnings": []
+            }}"#
+        );
+
+        let parsed = parse_lexi_result_v1(&raw_json).expect("provider output parses");
+        let fixed = finalize_word_study_result(parsed, "ja");
+
+        assert_eq!(fixed.result_language, "ja");
+        assert_eq!(fixed.source_language, "en");
+    }
+
+    #[test]
+    fn word_study_schema_tracks_settings_result_language() {
+        for language in ["ja", "en", "ko", "zh"] {
+            assert_eq!(
+                lexi_result_schema(language)["properties"]["resultLanguage"]["enum"][0],
+                language
+            );
+            assert_eq!(
+                lexi_result_schema(language)["properties"]["sourceLanguage"]["enum"][0],
+                "en"
+            );
+            assert_eq!(
+                gemini_lexi_result_schema(language)["properties"]["resultLanguage"]["enum"][0],
+                language
+            );
+            assert_eq!(
+                gemini_lexi_result_schema(language)["properties"]["sourceLanguage"]["enum"][0],
+                "en"
+            );
+        }
+    }
+
+    #[test]
+    fn word_study_prompt_declares_source_and_result_language() {
+        let prompt = build_word_study_prompt(&TransformRequest {
+            selected_text: "play".to_string(),
+            result_language: "ja".to_string(),
+            prompt_mode: "word-study".to_string(),
+        });
+
+        assert!(prompt.contains(r#"sourceLanguage must be "en""#));
+        assert!(prompt.contains(r#"resultLanguage must be "ja""#));
     }
 
     #[test]
@@ -2613,8 +2738,13 @@ mod tests {
 
     #[test]
     fn openai_schema_matches_result_validation_cardinality() {
-        let schema = lexi_result_schema();
+        let schema = lexi_result_schema("ja");
 
+        assert_eq!(
+            schema["properties"]["sourceLanguage"]["enum"][0],
+            "en"
+        );
+        assert_eq!(schema["properties"]["resultLanguage"]["enum"][0], "ja");
         assert_eq!(schema["properties"]["translations"]["minItems"], 1);
         assert_eq!(schema["properties"]["translations"]["maxItems"], 3);
         assert_eq!(schema["properties"]["inflections"]["minItems"], 0);
@@ -2657,8 +2787,13 @@ mod tests {
 
     #[test]
     fn gemini_schema_matches_result_validation_cardinality() {
-        let schema = gemini_lexi_result_schema();
+        let schema = gemini_lexi_result_schema("ja");
 
+        assert_eq!(
+            schema["properties"]["sourceLanguage"]["enum"][0],
+            "en"
+        );
+        assert_eq!(schema["properties"]["resultLanguage"]["enum"][0], "ja");
         assert_eq!(schema["properties"]["translations"]["minItems"], 1);
         assert_eq!(schema["properties"]["translations"]["maxItems"], 3);
         assert_eq!(schema["properties"]["inflections"]["minItems"], 0);
