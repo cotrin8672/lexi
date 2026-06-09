@@ -7,6 +7,7 @@ data class UserLexeme(
     val canonicalText: String,
     val canonicalKey: String,
     val partOfSpeech: String? = null,
+    val createdAt: String = "",
 )
 
 data class CardSnapshot(

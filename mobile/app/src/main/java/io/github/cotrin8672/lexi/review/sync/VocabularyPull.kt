@@ -12,13 +12,11 @@ import java.time.Instant
 import java.util.UUID
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
-import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.decodeFromJsonElement
 import kotlinx.serialization.json.jsonArray
-import kotlinx.serialization.json.jsonPrimitive
 
 internal object VocabularyPull {
     private val json = Json {
@@ -96,15 +94,64 @@ internal object VocabularyPull {
         userId: String,
         change: PulledChange,
     ) {
-        if (change.entityType != "card_snapshot" || change.changeType != "upsert") {
+        if (change.changeType != "upsert") {
             return
         }
+        when (change.entityType) {
+            "user_lexeme" -> applyUserLexemeChange(cacheDao, userId, change)
+            "card_snapshot" -> applyCardSnapshotChange(cacheDao, userId, change)
+        }
+    }
+
+    private suspend fun applyUserLexemeChange(
+        cacheDao: VocabularyCacheDao,
+        userId: String,
+        change: PulledChange,
+    ) {
+        val payload = change.payload.asObject()
+        val language = payload.stringValue("language") ?: "en"
+        val canonicalText = payload.requiredString("canonicalText")
+        val canonicalKey = payload.requiredString("canonicalKey")
+        val partOfSpeech = payload.stringValue("partOfSpeech")
+        val payloadCreatedAt = payload.stringValue("createdAt")
+        val now = Instant.now().toString()
+
+        val lexemeId = change.entityId?.takeIf { it.isNotBlank() }
+            ?: cacheDao.findLexemeId(userId, language, canonicalKey)
+            ?: error("Supabase user_lexeme pull missing entityId")
+
+        val existingLexeme = cacheDao.findLexemeById(userId, lexemeId)
+            ?: cacheDao.findLexemeByKey(userId, language, canonicalKey)
+        val createdAt = resolveLexemeCreatedAt(
+            existingCreatedAt = existingLexeme?.createdAt,
+            payloadCreatedAt = payloadCreatedAt,
+            now = now,
+        )
+
+        cacheDao.upsertLexeme(
+            CachedUserLexemeEntity(
+                id = lexemeId,
+                userId = userId,
+                language = language,
+                canonicalText = canonicalText,
+                canonicalKey = canonicalKey,
+                partOfSpeech = partOfSpeech ?: existingLexeme?.partOfSpeech,
+                createdAt = createdAt,
+                updatedAt = now,
+            ),
+        )
+    }
+
+    private suspend fun applyCardSnapshotChange(
+        cacheDao: VocabularyCacheDao,
+        userId: String,
+        change: PulledChange,
+    ) {
         if (cacheDao.hasAppliedPullChange(userId, change.operationId, change.serverRevision)) {
             return
         }
 
-        val payload = change.payload as? JsonObject
-            ?: error("Supabase pull payload was not an object")
+        val payload = change.payload.asObject()
         val language = payload.stringValue("language") ?: "en"
         val canonicalText = payload.requiredString("canonicalText")
         val canonicalKey = payload.requiredString("canonicalKey")
@@ -127,7 +174,14 @@ internal object VocabularyPull {
             ?: cacheDao.findLexemeId(userId, language, canonicalKey)
             ?: UUID.randomUUID().toString()
 
+        val existingLexeme = cacheDao.findLexemeById(userId, lexemeId)
+            ?: cacheDao.findLexemeByKey(userId, language, canonicalKey)
         val partOfSpeech = parsedContent.translations.firstOrNull()?.note
+        val createdAt = resolveLexemeCreatedAt(
+            existingCreatedAt = existingLexeme?.createdAt,
+            payloadCreatedAt = null,
+            now = now,
+        )
         cacheDao.upsertLexeme(
             CachedUserLexemeEntity(
                 id = lexemeId,
@@ -135,7 +189,8 @@ internal object VocabularyPull {
                 language = language,
                 canonicalText = canonicalText,
                 canonicalKey = canonicalKey,
-                partOfSpeech = partOfSpeech,
+                partOfSpeech = partOfSpeech ?: existingLexeme?.partOfSpeech,
+                createdAt = createdAt,
                 updatedAt = now,
             ),
         )
@@ -180,6 +235,9 @@ internal object VocabularyPull {
             ),
         )
     }
+
+    private fun JsonElement.asObject(): JsonObject =
+        this as? JsonObject ?: error("Supabase pull payload was not an object")
 
     private fun JsonObject.stringValue(key: String): String? =
         (this[key] as? JsonPrimitive)?.content

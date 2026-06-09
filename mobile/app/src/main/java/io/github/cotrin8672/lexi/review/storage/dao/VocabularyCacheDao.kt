@@ -62,6 +62,31 @@ interface VocabularyCacheDao {
         canonicalKey: String,
     ): String?
 
+    @Query(
+        """
+        SELECT * FROM cached_user_lexemes
+        WHERE userId = :userId AND id = :lexemeId
+        LIMIT 1
+        """,
+    )
+    suspend fun findLexemeById(
+        userId: String,
+        lexemeId: String,
+    ): CachedUserLexemeEntity?
+
+    @Query(
+        """
+        SELECT * FROM cached_user_lexemes
+        WHERE userId = :userId AND language = :language AND canonicalKey = :canonicalKey
+        LIMIT 1
+        """,
+    )
+    suspend fun findLexemeByKey(
+        userId: String,
+        language: String,
+        canonicalKey: String,
+    ): CachedUserLexemeEntity?
+
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun upsertLexemes(rows: List<CachedUserLexemeEntity>)
 

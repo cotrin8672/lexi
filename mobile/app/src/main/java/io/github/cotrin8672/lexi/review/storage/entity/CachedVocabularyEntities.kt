@@ -12,6 +12,7 @@ data class CachedUserLexemeEntity(
     val canonicalText: String,
     val canonicalKey: String,
     val partOfSpeech: String?,
+    val createdAt: String = "",
     val updatedAt: String,
 )
 

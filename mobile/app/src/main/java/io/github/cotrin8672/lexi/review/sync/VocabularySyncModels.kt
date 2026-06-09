@@ -11,6 +11,7 @@ data class BootstrapLexemeRow(
     @SerialName("canonical_text") val canonicalText: String,
     @SerialName("canonical_key") val canonicalKey: String,
     @SerialName("part_of_speech") val partOfSpeech: String? = null,
+    @SerialName("created_at") val createdAt: String? = null,
 )
 
 @Serializable
@@ -47,6 +48,7 @@ data class PulledChange(
     @SerialName("serverRevision") val serverRevision: Long,
     @SerialName("operationId") val operationId: String,
     @SerialName("entityType") val entityType: String,
+    @SerialName("entityId") val entityId: String? = null,
     @SerialName("changeType") val changeType: String,
     val payload: JsonElement,
 )

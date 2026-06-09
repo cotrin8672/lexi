@@ -55,6 +55,17 @@ class DefaultVocabularyRepositoryTest {
             canonicalKey: String,
         ): String? = null
 
+        override suspend fun findLexemeById(
+            userId: String,
+            lexemeId: String,
+        ): CachedUserLexemeEntity? = null
+
+        override suspend fun findLexemeByKey(
+            userId: String,
+            language: String,
+            canonicalKey: String,
+        ): CachedUserLexemeEntity? = null
+
         override suspend fun upsertLexemes(rows: List<CachedUserLexemeEntity>) = Unit
 
         override suspend fun upsertLexeme(row: CachedUserLexemeEntity) = Unit

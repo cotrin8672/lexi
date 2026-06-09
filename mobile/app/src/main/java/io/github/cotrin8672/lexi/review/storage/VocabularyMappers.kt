@@ -35,6 +35,7 @@ fun CachedUserLexemeEntity.toDomain(): UserLexeme = UserLexeme(
     canonicalText = canonicalText,
     canonicalKey = canonicalKey,
     partOfSpeech = partOfSpeech,
+    createdAt = createdAt,
 )
 
 fun CachedCardSnapshotEntity.toDomain(): CardSnapshot = CardSnapshot(
@@ -69,6 +70,7 @@ private fun UserLexeme.toEntity(updatedAt: String): CachedUserLexemeEntity =
         canonicalText = canonicalText,
         canonicalKey = canonicalKey,
         partOfSpeech = partOfSpeech,
+        createdAt = createdAt.ifBlank { updatedAt },
         updatedAt = updatedAt,
     )
 

@@ -39,7 +39,7 @@ internal object VocabularyBootstrap {
         val lexemes = restClient.getAllRows<BootstrapLexemeRow>(
             accessToken = accessToken,
             table = "user_lexemes",
-            select = "id,language,canonical_text,canonical_key,part_of_speech",
+            select = "id,language,canonical_text,canonical_key,part_of_speech,created_at",
             filters = listOf("deleted_at" to "is.null"),
         )
         val forms = restClient.getAllRows<BootstrapFormRow>(
@@ -64,6 +64,7 @@ internal object VocabularyBootstrap {
                     canonicalText = it.canonicalText,
                     canonicalKey = it.canonicalKey,
                     partOfSpeech = it.partOfSpeech,
+                    createdAt = bootstrapLexemeCreatedAt(it.createdAt, now),
                     updatedAt = now,
                 )
             }
