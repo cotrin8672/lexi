@@ -1122,7 +1122,7 @@ Hard requirements:
 - If the selection is a sentence, choose the central word or phrase as headword and normalize that headword to its dictionary/base form when possible.
 - Return inflections only for irregular noun plural forms or irregular verb past/past participle forms. Use an empty inflections array for regular forms, adjectives, adverbs, phrases without a clear headword, or uncertain data.
 - If reliable synonyms are unavailable, use an empty array instead of guessing.
-- If useful idioms containing or strongly associated with the headword are unavailable, use an empty idioms array instead of guessing.
+- If useful simple idioms, phrasal verbs, or short collocations containing the headword are unavailable, use an empty idioms array instead of guessing.
 
 Field contract:
 - headword: canonical dictionary/base form or short phrase, max 48 characters. Do not copy an inflected selected word such as a past-tense verb when a base form is known.
@@ -1151,10 +1151,12 @@ Field contract:
   - term: a real common near word.
   - japanese: concise meaning.
   - usageComparison: one direct sentence comparing the synonym with the headword. Explain when to choose the headword and when to choose this synonym, max 110 Japanese characters.
-- idioms: 0 to 3 common idioms, fixed expressions, or phrasal expressions that contain or strongly feature the headword. Prefer expressions that help a learner recognize natural usage.
-  - idiom: the English idiom or expression, max 64 characters.
-  - japanese: concise Japanese meaning, max 64 characters.
-  - example: one short natural English example sentence using the idiom, max 120 characters.
+- idioms: 0 to 3 simple, high-frequency idioms, phrasal verbs, or short fixed collocations that contain or strongly feature the headword. These are compact learner-facing pattern labels, not full sentence templates or ornate set phrases.
+  - Prefer the shortest established expression that still teaches natural usage. For headword "tend", return "tend to", not "tend to one's needs" or other padded expansions.
+  - idiom: the minimal English collocation or idiom only, max 64 characters. Do not add possessives, objects, or extra words unless they are inseparable from the established expression. Good: "tend to", "look up", "in spite of". Bad: "tend to one's needs", "look up the answer in the dictionary".
+  - Phrasal-verb style entries are preferred over proverb-like or overly specific fixed expressions.
+  - japanese: concise Japanese meaning of that minimal expression, max 64 characters.
+  - example: one short natural English example sentence using the idiom, max 120 characters. The example sentence may be longer than the idiom label, but the idiom field itself must stay minimal.
 - warnings: empty unless the input is ambiguous, too short, not a word/phrase, or confidence is low.
 
 Quality rules:
@@ -1166,7 +1168,7 @@ Quality rules:
 - A Japanese synonym, register difference, or wording preference is not a sense boundary. Do not split entries for pairs like 近づく/接近する, 始める/開始する, 使う/使用する, わずかな/少しの.
 - Keep each translation example short and aligned with that translation's specific sense.
 - Do not repeat the same information across headword nuance and synonym usageComparison.
-- Do not pad idioms. Return only established expressions; do not invent examples as idiom labels.
+- Do not pad idioms. Return only established expressions; do not invent examples as idiom labels. Do not inflate a simple collocation into a longer ornate idiom. If "tend to" is enough, do not output "tend to someone's needs".
 - Do not pad inflections. Regular forms must be omitted.
 - Do not pad arrays to hit counts.
 - Preserve selected text privacy; never quote more than needed for headword/examples.
@@ -2873,7 +2875,11 @@ mod tests {
         assert!(prompt.contains("Do not include senseKind or baseWord"));
         assert!(prompt.contains("example is required for every translation item"));
         assert!(prompt.contains("idioms: 0 to 3"));
+        assert!(prompt.contains("tend to"));
+        assert!(prompt.contains("tend to one's needs"));
+        assert!(prompt.contains("minimal English collocation"));
         assert!(prompt.contains("Do not pad idioms"));
+        assert!(prompt.contains("Do not inflate a simple collocation"));
     }
 
     #[test]

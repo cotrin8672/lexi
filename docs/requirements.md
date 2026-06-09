@@ -157,8 +157,8 @@ Rules:
 - `nuance` should be an intuitive explanation for deciding when the headword is appropriate.
 - `synonyms` may be empty when reliable near words are unavailable; otherwise it should contain near words that help the user learn practical usage distinctions.
 - Each synonym must include the English term, Japanese meaning, and a direct `usageComparison` sentence against the headword.
-- `idioms` may be empty when reliable idioms are unavailable; otherwise it should contain up to three common idioms or fixed expressions associated with the headword.
-- Each idiom must include the English idiom, Japanese meaning, and one short English example sentence.
+- `idioms` may be empty when reliable idioms are unavailable; otherwise it should contain up to three simple idioms, phrasal verbs, or short collocations associated with the headword. Prefer minimal pattern labels such as `tend to` rather than ornate expansions such as `tend to one's needs`.
+- Each idiom must include the minimal English expression, Japanese meaning, and one short English example sentence.
 - Antonyms are intentionally omitted from the first word-study result.
 - The renderer must reject unknown or missing schema versions instead of guessing.
 
