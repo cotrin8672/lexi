@@ -339,12 +339,13 @@ class ReviewViewModel(
     private suspend fun loadAndShowVocabularyList(userId: String) {
         when (val result = loadSessionVocabulary(vocabularyRepository, userId)) {
             is VocabularyLoadResult.Success -> {
+                val vocabularyList = result.cards.toVocabularyListItems()
                 setUiState(
                     ReviewUiState(
                         loadPhase = SessionLoadPhase.VOCABULARY_LIST,
                         vocabularySource = result.source,
-                        vocabularyList = result.cards.toVocabularyListItems(),
-                        vocabularyCount = result.cards.size,
+                        vocabularyList = vocabularyList,
+                        vocabularyCount = vocabularyList.size,
                     ),
                 )
             }
@@ -406,12 +407,13 @@ class ReviewViewModel(
 
         when (val result = loadSessionVocabulary(vocabularyRepository, userId)) {
             is VocabularyLoadResult.Success -> {
+                val vocabularyList = result.cards.toVocabularyListItems()
                 setUiState(
                     ReviewUiState(
                         loadPhase = SessionLoadPhase.VOCABULARY_LIST,
                         vocabularySource = result.source,
-                        vocabularyList = result.cards.toVocabularyListItems(),
-                        vocabularyCount = result.cards.size,
+                        vocabularyList = vocabularyList,
+                        vocabularyCount = vocabularyList.size,
                     ),
                 )
             }

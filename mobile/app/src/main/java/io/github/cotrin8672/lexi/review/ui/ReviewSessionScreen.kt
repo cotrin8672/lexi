@@ -405,9 +405,12 @@ private fun VocabularyListState(
             )
         } else {
             LazyColumn(
+                modifier = Modifier
+                    .weight(1f)
+                    .fillMaxWidth(),
                 verticalArrangement = Arrangement.spacedBy(10.dp),
             ) {
-                items(uiState.vocabularyList, key = { it.headword }) { item ->
+                items(uiState.vocabularyList, key = { it.lexemeId }) { item ->
                     VocabularyListRow(item = item)
                 }
             }
