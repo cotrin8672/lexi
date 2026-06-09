@@ -7,6 +7,7 @@ import io.github.cotrin8672.lexi.review.ReorderBankSlot
 import io.github.cotrin8672.lexi.review.VocabularyListItem
 import io.github.cotrin8672.lexi.review.availableReorderTokens
 import io.github.cotrin8672.lexi.review.reorderBankSlots
+import io.github.cotrin8672.lexi.review.schema.LexiResultV1
 import io.github.cotrin8672.lexi.review.storage.VocabularySource
 
 enum class SessionLoadPhase {
@@ -22,13 +23,19 @@ enum class QuestionInteractionPhase {
     ANSWERING,
     CHECKED,
     SKIPPED,
+    /** Full dictionary-style word explanation after a wrong answer or skip. */
+    WORD_DETAIL,
 }
 
-data class WrongAnswerLearningContext(
-    val headword: String,
-    val correctAnswer: String,
-    val nuance: String? = null,
-    val detail: String? = null,
+data class WordDetailContext(
+    val content: LexiResultV1,
+    val partOfSpeech: String? = null,
+    val irregularForms: List<String> = emptyList(),
+    val reviewHeadline: String,
+    val reviewSubline: String? = null,
+    val highlightTranslation: String? = null,
+    val highlightExampleSentence: String? = null,
+    val highlightSynonymTerm: String? = null,
 )
 
 sealed interface RenderedQuestion {
@@ -74,7 +81,7 @@ data class ReviewUiState(
     val reorderBankOrder: List<String> = emptyList(),
     val reorderSelectedTokens: List<String> = emptyList(),
     val lastCheckCorrect: Boolean? = null,
-    val wrongAnswerContext: WrongAnswerLearningContext? = null,
+    val wordDetailContext: WordDetailContext? = null,
     val sessionAnswered: Int = 0,
     val sessionCorrect: Int = 0,
     val vocabularyList: List<VocabularyListItem> = emptyList(),

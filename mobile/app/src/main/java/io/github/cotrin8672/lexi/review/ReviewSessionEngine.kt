@@ -7,7 +7,7 @@ import io.github.cotrin8672.lexi.review.ui.QuestionInteractionPhase
 import io.github.cotrin8672.lexi.review.ui.RenderedQuestion
 import io.github.cotrin8672.lexi.review.ui.ReviewUiState
 import io.github.cotrin8672.lexi.review.ui.SessionLoadPhase
-import io.github.cotrin8672.lexi.review.ui.WrongAnswerLearningContext
+import io.github.cotrin8672.lexi.review.ui.WordDetailContext
 import kotlin.random.Random
 
 class ReviewSessionEngine(
@@ -162,13 +162,23 @@ class ReviewSessionEngine(
             sessionCorrect += 1
         }
 
-        _state = _state.copy(
-            interactionPhase = QuestionInteractionPhase.CHECKED,
-            lastCheckCorrect = correct,
-            wrongAnswerContext = if (correct) null else buildWrongAnswerContext(candidate),
-            sessionAnswered = sessionAnswered,
-            sessionCorrect = sessionCorrect,
-        )
+        _state = if (correct) {
+            _state.copy(
+                interactionPhase = QuestionInteractionPhase.CHECKED,
+                lastCheckCorrect = true,
+                wordDetailContext = null,
+                sessionAnswered = sessionAnswered,
+                sessionCorrect = sessionCorrect,
+            )
+        } else {
+            _state.copy(
+                interactionPhase = QuestionInteractionPhase.WORD_DETAIL,
+                lastCheckCorrect = false,
+                wordDetailContext = buildWordDetailContext(candidate),
+                sessionAnswered = sessionAnswered,
+                sessionCorrect = sessionCorrect,
+            )
+        }
         return _state
     }
 
@@ -178,9 +188,9 @@ class ReviewSessionEngine(
         }
         val candidate = currentCandidate
         _state = _state.copy(
-            interactionPhase = QuestionInteractionPhase.SKIPPED,
+            interactionPhase = QuestionInteractionPhase.WORD_DETAIL,
             lastCheckCorrect = null,
-            wrongAnswerContext = candidate?.let { buildWrongAnswerContext(it) },
+            wordDetailContext = candidate?.let { buildWordDetailContext(it) },
         )
         return _state
     }
@@ -212,7 +222,7 @@ class ReviewSessionEngine(
             },
             reorderSelectedTokens = emptyList(),
             lastCheckCorrect = null,
-            wrongAnswerContext = null,
+            wordDetailContext = null,
         )
         return _state
     }
@@ -314,41 +324,64 @@ class ReviewSessionEngine(
         }
     }
 
-    private fun buildWrongAnswerContext(candidate: QuestionCandidate): WrongAnswerLearningContext {
-        val nuance = cardNuance(candidate.lexemeId)
-        return when (val payload = candidate.payload) {
-            is QuestionPayload.Meaning -> WrongAnswerLearningContext(
-                headword = payload.headword,
-                correctAnswer = payload.correctMeaning,
-                nuance = nuance,
-                detail = payload.partOfSpeechNote,
-            )
-            is QuestionPayload.Usage -> WrongAnswerLearningContext(
-                headword = payload.headword,
-                correctAnswer = payload.correctTerm,
-                nuance = nuance,
-                detail = payload.comparison,
-            )
-            is QuestionPayload.Inflection -> WrongAnswerLearningContext(
-                headword = payload.headword,
-                correctAnswer = payload.formText,
-                nuance = nuance,
-                detail = payload.relation,
-            )
-            is QuestionPayload.Reorder -> WrongAnswerLearningContext(
-                headword = cardHeadword(candidate.lexemeId) ?: "Sentence",
-                correctAnswer = payload.originalSentence,
-                nuance = nuance,
-                detail = payload.promptJapanese,
-            )
-        }
+    private fun buildWordDetailContext(candidate: QuestionCandidate): WordDetailContext? {
+        val card = cards.firstOrNull { it.lexemeId == candidate.lexemeId } ?: return null
+        val content = card.content
+        val irregularForms = buildList {
+            content.inflections.forEach { inflection ->
+                if (inflection.form != content.headword) {
+                    add(inflection.form)
+                }
+            }
+            card.forms.filter { it.relation == "irregular" }.forEach { form ->
+                if (form.formText != content.headword) {
+                    add(form.formText)
+                }
+            }
+        }.distinct()
+        val summary = reviewSummaryFor(candidate)
+        return WordDetailContext(
+            content = content,
+            partOfSpeech = card.lexeme.partOfSpeech,
+            irregularForms = irregularForms,
+            reviewHeadline = summary.headline,
+            reviewSubline = summary.subline,
+            highlightTranslation = summary.highlightTranslation,
+            highlightExampleSentence = summary.highlightExampleSentence,
+            highlightSynonymTerm = summary.highlightSynonymTerm,
+        )
     }
 
-    private fun cardNuance(lexemeId: String): String? =
-        cards.firstOrNull { it.lexemeId == lexemeId }?.content?.nuance
+    private data class ReviewSummary(
+        val headline: String,
+        val subline: String?,
+        val highlightTranslation: String? = null,
+        val highlightExampleSentence: String? = null,
+        val highlightSynonymTerm: String? = null,
+    )
 
-    private fun cardHeadword(lexemeId: String): String? =
-        cards.firstOrNull { it.lexemeId == lexemeId }?.content?.headword
+    private fun reviewSummaryFor(candidate: QuestionCandidate): ReviewSummary =
+        when (val payload = candidate.payload) {
+            is QuestionPayload.Meaning -> ReviewSummary(
+                headline = "正解: ${payload.correctMeaning}",
+                subline = payload.partOfSpeechNote,
+                highlightTranslation = payload.correctMeaning,
+            )
+            is QuestionPayload.Usage -> ReviewSummary(
+                headline = "正解: ${payload.correctTerm}",
+                subline = payload.comparison,
+                highlightSynonymTerm = payload.correctTerm,
+            )
+            is QuestionPayload.Inflection -> ReviewSummary(
+                headline = "正解: ${payload.formText}",
+                subline = formatInflectionRelationLabel(payload.relation),
+            )
+            is QuestionPayload.Reorder -> ReviewSummary(
+                headline = payload.originalSentence,
+                subline = payload.promptJapanese,
+                highlightExampleSentence = payload.originalSentence,
+            )
+        }
 
     private fun recordRecent(candidate: QuestionCandidate) {
         recentQuestionKeys.addFirst(candidate.questionKey)
@@ -361,6 +394,15 @@ class ReviewSessionEngine(
         }
     }
 }
+
+private fun formatInflectionRelationLabel(relation: String): String =
+    when (relation.lowercase()) {
+        "past" -> "過去形"
+        "pastparticiple", "past_participle" -> "過去分詞"
+        "plural" -> "複数形"
+        "irregular" -> "不規則変化"
+        else -> relation.replace('_', ' ').trim()
+    }
 
 private fun inflectionPrimaryText(payload: QuestionPayload.Inflection): String =
     when (payload.direction) {

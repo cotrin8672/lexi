@@ -26,7 +26,7 @@ class ReviewSessionEngineTest {
     @Test
     fun checkUpdatesStatsButSkipDoesNot() {
         val engine = ReviewSessionEngine(now = { ReviewFixtures.FIXTURE_TIMESTAMP })
-        engine.startWithCards(cards, VocabularySource.FIXTURE)
+        engine.startWithCards(cards, VocabularySource.FIXTURE, ReviewMode.MEANING_ONLY)
         val questionKey = engine.state.currentQuestion?.candidate?.questionKey
             ?: error("expected a rendered question")
 
@@ -40,6 +40,7 @@ class ReviewSessionEngineTest {
         val skippedKey = engine.state.currentQuestion?.candidate?.questionKey
             ?: error("expected another question")
         engine.skipQuestion()
+        assertEquals(QuestionInteractionPhase.WORD_DETAIL, engine.state.interactionPhase)
         engine.advanceToNextQuestion()
 
         assertEquals(1, engine.statsSnapshot()[questionKey]?.attempts)
@@ -159,7 +160,7 @@ class ReviewSessionEngineTest {
     }
 
     @Test
-    fun wrongAnswerProvidesLearningContext() {
+    fun wrongAnswerOpensWordDetailWithFullCard() {
         val engine = ReviewSessionEngine(now = { ReviewFixtures.FIXTURE_TIMESTAMP })
         engine.startWithCards(cards, VocabularySource.FIXTURE, ReviewMode.MEANING_ONLY)
 
@@ -172,9 +173,13 @@ class ReviewSessionEngineTest {
         }
         engine.checkAnswer()
 
-        val context = engine.state.wrongAnswerContext
+        assertEquals(QuestionInteractionPhase.WORD_DETAIL, engine.state.interactionPhase)
+        assertEquals(false, engine.state.lastCheckCorrect)
+        val context = engine.state.wordDetailContext
         assertTrue(context != null)
-        assertTrue(!context!!.correctAnswer.isBlank())
+        assertTrue(context!!.content.translations.isNotEmpty())
+        assertTrue(context.reviewHeadline.startsWith("正解:"))
+        assertTrue(!context.content.nuance.isBlank())
     }
 
     @Test

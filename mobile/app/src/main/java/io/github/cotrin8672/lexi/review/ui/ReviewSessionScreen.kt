@@ -493,14 +493,13 @@ private fun ReadyState(
 ) {
     val question = uiState.currentQuestion
     val questionKey = question?.candidate?.questionKey
+    val showingWordDetail = uiState.interactionPhase == QuestionInteractionPhase.WORD_DETAIL
     val canTapToContinue = uiState.interactionPhase == QuestionInteractionPhase.CHECKED ||
-        uiState.interactionPhase == QuestionInteractionPhase.SKIPPED
+        showingWordDetail
     val canTapEmptyToCheck = uiState.interactionPhase == QuestionInteractionPhase.ANSWERING &&
         uiState.canCheckAnswer() &&
         (question is RenderedQuestion.Reorder || question is RenderedQuestion.Inflection)
-    val isWrong = uiState.interactionPhase == QuestionInteractionPhase.CHECKED &&
-        uiState.lastCheckCorrect == false
-    val isSkipped = uiState.interactionPhase == QuestionInteractionPhase.SKIPPED
+    val wasSkipped = showingWordDetail && uiState.lastCheckCorrect == null
     val emptyTapCheckInteraction = remember { MutableInteractionSource() }
     var advanceConsumed by remember(questionKey) { mutableStateOf(false) }
     var emptyTapCheckConsumed by remember(questionKey) { mutableStateOf(false) }
@@ -530,15 +529,48 @@ private fun ReadyState(
     }
 
     LaunchedEffect(uiState.interactionPhase, uiState.lastCheckCorrect) {
-        if (uiState.interactionPhase == QuestionInteractionPhase.CHECKED) {
-            view.performHapticFeedback(
+        when (uiState.interactionPhase) {
+            QuestionInteractionPhase.CHECKED -> {
                 if (uiState.lastCheckCorrect == true) {
-                    HapticFeedbackConstants.CONFIRM
-                } else {
-                    HapticFeedbackConstants.REJECT
-                },
-            )
+                    view.performHapticFeedback(HapticFeedbackConstants.CONFIRM)
+                }
+            }
+            QuestionInteractionPhase.WORD_DETAIL -> {
+                if (uiState.lastCheckCorrect == false) {
+                    view.performHapticFeedback(HapticFeedbackConstants.REJECT)
+                }
+            }
+            else -> Unit
         }
+    }
+
+    if (showingWordDetail) {
+        Box(modifier = modifier.fillMaxSize()) {
+            Column(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .padding(horizontal = 20.dp, vertical = 16.dp),
+            ) {
+                VocabularySyncStatus(
+                    source = uiState.vocabularySource,
+                    wordCount = uiState.vocabularyCount,
+                    questionCount = uiState.totalCandidates,
+                )
+                Spacer(modifier = Modifier.height(8.dp))
+                uiState.wordDetailContext?.let { context ->
+                    WordDetailScreen(
+                        context = context,
+                        wasSkipped = wasSkipped,
+                        modifier = Modifier.weight(1f),
+                    )
+                } ?: Text(
+                    text = "Word details are unavailable.",
+                    modifier = Modifier.weight(1f),
+                )
+            }
+            TapToContinueOverlay(onTap = advanceOnce)
+        }
+        return
     }
 
     Box(modifier = modifier.fillMaxSize()) {
@@ -576,8 +608,7 @@ private fun ReadyState(
                     horizontalAlignment = Alignment.CenterHorizontally,
                 ) {
                     AnimatedVisibility(
-                        visible = canTapToContinue &&
-                            uiState.interactionPhase == QuestionInteractionPhase.CHECKED,
+                        visible = uiState.interactionPhase == QuestionInteractionPhase.CHECKED,
                         enter = fadeIn(),
                         exit = fadeOut(),
                     ) {
@@ -586,13 +617,7 @@ private fun ReadyState(
                             modifier = Modifier.fillMaxWidth(),
                         )
                     }
-                    if (canTapToContinue && (isWrong || isSkipped)) {
-                        uiState.wrongAnswerContext?.let { context ->
-                            Spacer(modifier = Modifier.height(12.dp))
-                            WrongAnswerLearningCard(context = context)
-                        }
-                    }
-                    if (canTapToContinue) {
+                    if (uiState.interactionPhase == QuestionInteractionPhase.CHECKED) {
                         Spacer(modifier = Modifier.height(16.dp))
                     }
                     when (question) {
@@ -624,7 +649,7 @@ private fun ReadyState(
                         )
                         null -> Text("No question loaded.")
                     }
-                    if (canTapToContinue) {
+                    if (uiState.interactionPhase == QuestionInteractionPhase.CHECKED) {
                         Spacer(modifier = Modifier.height(24.dp))
                         Text(
                             text = "Tap to continue",
