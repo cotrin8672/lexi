@@ -1,18 +1,10 @@
 package io.github.cotrin8672.lexi.review.ui
 
-import androidx.compose.animation.AnimatedVisibility
-import androidx.compose.animation.core.Spring
-import androidx.compose.animation.core.spring
-import androidx.compose.animation.fadeIn
-import androidx.compose.animation.fadeOut
-import androidx.compose.animation.scaleIn
-import androidx.compose.animation.scaleOut
-import androidx.compose.animation.slideInVertically
-import androidx.compose.animation.slideOutVertically
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.FlowRow
@@ -23,6 +15,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Check
@@ -38,11 +31,15 @@ import androidx.compose.material3.Text
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.ui.text.input.KeyboardCapitalization
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.key
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.text.TextMeasurer
+import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.unit.IntOffset
+import androidx.compose.ui.text.rememberTextMeasurer
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import io.github.cotrin8672.lexi.review.InflectionDirection
 import io.github.cotrin8672.lexi.review.QuestionPayload
@@ -165,11 +162,13 @@ fun ReorderQuestionContent(
     modifier: Modifier = Modifier,
 ) {
     val answering = interactionPhase == QuestionInteractionPhase.ANSWERING
+    val correctTokens = (question.candidate.payload as? QuestionPayload.Reorder)?.tokens.orEmpty()
 
     Column(modifier = modifier) {
         PrimaryQuestionText(text = question.promptJapanese)
         Spacer(modifier = Modifier.height(28.dp))
         ReorderAnswerArea(
+            correctTokens = correctTokens,
             selectedTokens = selectedTokens,
             answering = answering,
             onRemoveTokenAtIndex = onRemoveTokenAtIndex,
@@ -380,66 +379,152 @@ private fun AnswerChoice(
     }
 }
 
-private fun reorderTokenMotionSpec() = spring<Float>(
-    dampingRatio = Spring.DampingRatioMediumBouncy,
-    stiffness = Spring.StiffnessMedium,
+private data class ReorderAnswerRowLayout(
+    val answerIndices: List<Int>,
+    val underlineWidthPx: Float,
 )
 
-private fun reorderTokenOffsetMotionSpec() = spring<IntOffset>(
-    dampingRatio = Spring.DampingRatioMediumBouncy,
-    stiffness = Spring.StiffnessMedium,
-)
+private fun layoutReorderAnswerRows(
+    slotWidthsPx: List<Int>,
+    maxWidthPx: Int,
+    tokenSpacingPx: Int,
+): List<ReorderAnswerRowLayout> {
+    if (slotWidthsPx.isEmpty() || maxWidthPx <= 0) {
+        return emptyList()
+    }
+
+    val rows = mutableListOf<ReorderAnswerRowLayout>()
+    var currentIndices = mutableListOf<Int>()
+    var currentWidthPx = 0
+
+    fun flushRow() {
+        if (currentIndices.isEmpty()) return
+        val underlineWidthPx = currentIndices.fold(0) { width, index ->
+            width + slotWidthsPx[index].coerceAtMost(maxWidthPx)
+        } + tokenSpacingPx * (currentIndices.size - 1).coerceAtLeast(0)
+        rows.add(
+            ReorderAnswerRowLayout(
+                answerIndices = currentIndices.toList(),
+                underlineWidthPx = underlineWidthPx.toFloat().coerceAtMost(maxWidthPx.toFloat()),
+            ),
+        )
+        currentIndices = mutableListOf()
+        currentWidthPx = 0
+    }
+
+    slotWidthsPx.forEachIndexed { index, rawSlotWidthPx ->
+        val slotWidthPx = rawSlotWidthPx.coerceAtMost(maxWidthPx)
+        val spacingPx = if (currentIndices.isEmpty()) 0 else tokenSpacingPx
+        val neededWidthPx = currentWidthPx + spacingPx + slotWidthPx
+
+        if (currentIndices.isNotEmpty() && neededWidthPx > maxWidthPx) {
+            flushRow()
+            currentIndices.add(index)
+            currentWidthPx = slotWidthPx
+        } else {
+            currentIndices.add(index)
+            currentWidthPx = neededWidthPx
+        }
+    }
+    flushRow()
+
+    return rows
+}
+
+private fun measureTokenSlotWidthsPx(
+    tokens: List<String>,
+    textMeasurer: TextMeasurer,
+    style: TextStyle,
+    chipHorizontalPaddingPx: Int,
+): List<Int> =
+    tokens.map { token ->
+        textMeasurer.measure(token, style).size.width + chipHorizontalPaddingPx
+    }
 
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
 private fun ReorderAnswerArea(
+    correctTokens: List<String>,
     selectedTokens: List<String>,
     answering: Boolean,
     onRemoveTokenAtIndex: (Int) -> Unit,
     modifier: Modifier = Modifier,
 ) {
-    Column(modifier = modifier) {
-        FlowRow(
-            horizontalArrangement = Arrangement.spacedBy(6.dp),
-            verticalArrangement = Arrangement.spacedBy(8.dp),
-            modifier = Modifier
-                .fillMaxWidth()
-                .defaultMinSize(minHeight = 48.dp)
-                .padding(bottom = 8.dp),
-        ) {
-            selectedTokens.forEachIndexed { index, token ->
-                key("answer-$index-$token") {
-                    AnimatedVisibility(
-                        visible = true,
-                        enter = slideInVertically(
-                            animationSpec = reorderTokenOffsetMotionSpec(),
-                            initialOffsetY = { it / 2 },
-                        ) + fadeIn(animationSpec = reorderTokenMotionSpec()) +
-                            scaleIn(
-                                initialScale = 0.9f,
-                                animationSpec = reorderTokenMotionSpec(),
-                            ),
-                        exit = slideOutVertically(
-                            animationSpec = reorderTokenOffsetMotionSpec(),
-                            targetOffsetY = { it / 2 },
-                        ) + fadeOut(animationSpec = reorderTokenMotionSpec()) +
-                            scaleOut(
-                                targetScale = 0.9f,
-                                animationSpec = reorderTokenMotionSpec(),
-                            ),
-                    ) {
-                        TokenChip(
-                            text = token,
-                            enabled = answering,
-                            onClick = { onRemoveTokenAtIndex(index) },
-                        )
-                    }
+    val textMeasurer = rememberTextMeasurer()
+    val tokenStyle = MaterialTheme.typography.titleMedium
+    val density = LocalDensity.current
+    val tokenSpacing = 10.dp
+    val chipHorizontalPadding = 32.dp
+    val chipVerticalPadding = 24.dp
+
+    BoxWithConstraints(modifier = modifier) {
+        val maxWidthPx = constraints.maxWidth
+        val chipHorizontalPaddingPx = with(density) { chipHorizontalPadding.roundToPx() }
+        val tokenSpacingPx = with(density) { tokenSpacing.roundToPx() }
+        val slotWidthsPx = remember(correctTokens, tokenStyle, chipHorizontalPaddingPx) {
+            measureTokenSlotWidthsPx(
+                tokens = correctTokens,
+                textMeasurer = textMeasurer,
+                style = tokenStyle,
+                chipHorizontalPaddingPx = chipHorizontalPaddingPx,
+            )
+        }
+        val chipHeight = remember(tokenStyle, chipVerticalPadding) {
+            with(density) {
+                (
+                    textMeasurer.measure("Mg", tokenStyle).size.height +
+                        chipVerticalPadding.roundToPx()
+                    ).toDp()
+            }
+        }
+        val underlineRows = remember(slotWidthsPx, maxWidthPx, tokenSpacingPx) {
+            layoutReorderAnswerRows(
+                slotWidthsPx = slotWidthsPx,
+                maxWidthPx = maxWidthPx,
+                tokenSpacingPx = tokenSpacingPx,
+            )
+        }
+
+        Box(modifier = Modifier.fillMaxWidth()) {
+            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                underlineRows.forEach { row ->
+                    ReorderAnswerUnderlineRow(
+                        row = row,
+                        chipHeight = chipHeight,
+                    )
+                }
+            }
+            FlowRow(
+                horizontalArrangement = Arrangement.spacedBy(tokenSpacing),
+                verticalArrangement = Arrangement.spacedBy(tokenSpacing),
+                modifier = Modifier.fillMaxWidth(),
+            ) {
+                selectedTokens.forEachIndexed { index, token ->
+                    TokenChip(
+                        text = token,
+                        enabled = answering,
+                        onClick = { onRemoveTokenAtIndex(index) },
+                    )
                 }
             }
         }
+    }
+}
+
+@Composable
+private fun ReorderAnswerUnderlineRow(
+    row: ReorderAnswerRowLayout,
+    chipHeight: Dp,
+) {
+    val density = LocalDensity.current
+    val underlineWidth = with(density) { row.underlineWidthPx.toDp() }
+
+    Column {
+        Spacer(modifier = Modifier.height(chipHeight))
         Box(
             modifier = Modifier
-                .fillMaxWidth()
+                .width(underlineWidth)
+                .padding(top = 2.dp)
                 .height(2.dp)
                 .background(
                     MaterialTheme.colorScheme.onSurface.copy(alpha = 0.22f),
