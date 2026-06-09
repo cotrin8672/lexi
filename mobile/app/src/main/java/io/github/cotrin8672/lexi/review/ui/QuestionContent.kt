@@ -184,7 +184,9 @@ fun ReorderQuestionContent(
             modifier = Modifier.fillMaxWidth(),
         ) {
             bankSlots.forEachIndexed { index, slot ->
-                if (!slot.selected) {
+                if (slot.selected) {
+                    TokenPlaceholder(referenceToken = slot.token)
+                } else {
                     TokenChip(
                         text = slot.token,
                         enabled = answering,
@@ -466,6 +468,34 @@ private fun TokenChip(
             text = text,
             modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp),
             style = MaterialTheme.typography.titleMedium,
+        )
+    }
+}
+
+@Composable
+private fun TokenPlaceholder(
+    referenceToken: String? = null,
+) {
+    Surface(
+        enabled = false,
+        onClick = {},
+        shape = RoundedCornerShape(10.dp),
+        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.35f),
+        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.35f)),
+    ) {
+        Text(
+            text = referenceToken ?: "\u00A0",
+            modifier = Modifier
+                .padding(horizontal = 16.dp, vertical = 12.dp)
+                .then(
+                    if (referenceToken == null) {
+                        Modifier.defaultMinSize(minWidth = 40.dp)
+                    } else {
+                        Modifier
+                    },
+                ),
+            style = MaterialTheme.typography.titleMedium,
+            color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0f),
         )
     }
 }
