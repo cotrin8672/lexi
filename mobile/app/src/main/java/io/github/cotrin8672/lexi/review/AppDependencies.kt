@@ -6,6 +6,8 @@ import io.github.cotrin8672.lexi.review.storage.DefaultVocabularyRepository
 import io.github.cotrin8672.lexi.review.storage.LexiReviewDatabase
 import io.github.cotrin8672.lexi.review.storage.ReviewStore
 import io.github.cotrin8672.lexi.review.storage.RoomReviewStore
+import io.github.cotrin8672.lexi.review.storage.RoomStatsStore
+import io.github.cotrin8672.lexi.review.storage.StatsStore
 import io.github.cotrin8672.lexi.review.storage.VocabularyRepository
 import io.github.cotrin8672.lexi.review.speech.AndroidWordSpeech
 import io.github.cotrin8672.lexi.review.speech.WordSpeech
@@ -21,6 +23,7 @@ import kotlinx.coroutines.SupervisorJob
 class AppDependencies(
     val vocabularyRepository: VocabularyRepository,
     val reviewStore: ReviewStore,
+    val statsStore: StatsStore,
     val sessionStore: SupabaseSessionStore?,
     val supabaseConfigured: Boolean,
     val wordSpeech: WordSpeech,
@@ -53,7 +56,10 @@ class AppDependencies(
                 LexiReviewDatabase::class.java,
                 "lexi_review.db",
             )
-                .fallbackToDestructiveMigration()
+                .addMigrations(
+                    LexiReviewDatabase.MIGRATION_2_3,
+                    LexiReviewDatabase.MIGRATION_3_4,
+                )
                 .build()
             val supabaseConfigured = isSupabaseConfigured()
             val sessionStore = createSessionStore(supabaseConfigured)
@@ -82,6 +88,10 @@ class AppDependencies(
             return AppDependencies(
                 vocabularyRepository = vocabularyRepository,
                 reviewStore = RoomReviewStore(database.questionStatsDao()),
+                statsStore = RoomStatsStore(
+                    attemptEventDao = database.reviewAttemptEventDao(),
+                    studySessionDao = database.studySessionDao(),
+                ),
                 sessionStore = sessionStore,
                 supabaseConfigured = supabaseConfigured,
                 wordSpeech = wordSpeech,
