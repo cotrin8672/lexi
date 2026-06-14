@@ -340,10 +340,7 @@ pub fn apply_popup_always_on_top(app: &AppHandle, enabled: bool) -> Result<(), A
     };
 
     window.set_always_on_top(enabled).map_err(|error| {
-        AppError::settings_io_failed(
-            format!("popup always-on-top update failed: {error}"),
-            true,
-        )
+        AppError::settings_io_failed(format!("popup always-on-top update failed: {error}"), true)
     })
 }
 

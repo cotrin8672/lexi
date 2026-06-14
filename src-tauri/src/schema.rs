@@ -5,6 +5,7 @@ pub const LEXI_RESULT_V1_SCHEMA_VERSION: &str = "lexi.result.v1";
 pub const LEXI_TEXT_TRANSLATION_V1_SCHEMA_VERSION: &str = "lexi.text-translation.v1";
 pub const LEXI_JP_WORD_CANDIDATES_V1_SCHEMA_VERSION: &str = "lexi.jp-word-candidates.v1";
 pub const TRANSLATION_SENSE_KIND_VALUES: &[&str] = &["dictionary", "inflection"];
+const WARNING_MAX_CHARS: usize = 120;
 
 pub const TRANSLATION_NOTE_VALUES: &[&str] = &[
     "名詞",
@@ -201,7 +202,7 @@ impl LexiResultV1 {
 
         for (index, warning) in self.warnings.iter().enumerate() {
             validate_required(&format!("warnings[{index}]"), warning)?;
-            validate_max_chars(&format!("warnings[{index}]"), warning, 120)?;
+            validate_max_chars(&format!("warnings[{index}]"), warning, WARNING_MAX_CHARS)?;
         }
 
         Ok(self)
@@ -251,7 +252,7 @@ impl TextTranslationResultV1 {
 
         for (index, warning) in self.warnings.iter().enumerate() {
             validate_required(&format!("warnings[{index}]"), warning)?;
-            validate_max_chars(&format!("warnings[{index}]"), warning, 120)?;
+            validate_max_chars(&format!("warnings[{index}]"), warning, WARNING_MAX_CHARS)?;
         }
 
         Ok(self)
@@ -299,7 +300,7 @@ impl JapaneseWordCandidatesResultV1 {
 
         for (index, warning) in self.warnings.iter().enumerate() {
             validate_required(&format!("warnings[{index}]"), warning)?;
-            validate_max_chars(&format!("warnings[{index}]"), warning, 120)?;
+            validate_max_chars(&format!("warnings[{index}]"), warning, WARNING_MAX_CHARS)?;
         }
 
         Ok(self)
@@ -338,6 +339,8 @@ fn normalize_japanese_word_candidates_result(result: &mut JapaneseWordCandidates
             candidate.part_of_speech = normalized;
         }
     }
+
+    normalize_warnings(&mut result.warnings);
 }
 
 fn validate_english_candidate(field: &str, value: &EnglishCandidate) -> Result<(), AppError> {
@@ -416,6 +419,16 @@ fn normalize_provider_result(result: &mut LexiResultV1) {
             translation.base_word = None;
         }
     }
+
+    normalize_warnings(&mut result.warnings);
+}
+
+fn normalize_warnings(warnings: &mut Vec<String>) {
+    for warning in warnings.iter_mut() {
+        trim_string(warning);
+        truncate_chars(warning, WARNING_MAX_CHARS);
+    }
+    warnings.retain(|warning| !warning.is_empty());
 }
 
 fn normalize_translation_note(note: &mut Option<String>) {
@@ -458,6 +471,12 @@ fn trim_string(value: &mut String) {
     let trimmed = value.trim();
     if trimmed.len() != value.len() {
         *value = trimmed.to_string();
+    }
+}
+
+fn truncate_chars(value: &mut String, max: usize) {
+    if let Some((byte_index, _)) = value.char_indices().nth(max) {
+        value.truncate(byte_index);
     }
 }
 
@@ -709,6 +728,18 @@ mod tests {
             result.translations[0].base_word.as_deref(),
             Some("quantify")
         );
+    }
+
+    #[test]
+    fn parse_truncates_overlong_word_study_warnings() {
+        let mut result = valid_result();
+        result.warnings = vec!["  あ".repeat(130)];
+        let raw_json = serde_json::to_string(&result).expect("result serializes");
+
+        let result = parse_lexi_result_v1(&raw_json).expect("overlong warning should normalize");
+
+        assert_eq!(result.warnings.len(), 1);
+        assert_eq!(result.warnings[0].chars().count(), 120);
     }
 
     #[test]
@@ -1144,6 +1175,19 @@ mod tests {
 
         assert_eq!(result.query, "採用");
         assert_eq!(result.candidates.len(), 2);
+    }
+
+    #[test]
+    fn parse_truncates_overlong_japanese_word_candidate_warnings() {
+        let mut result = valid_japanese_word_candidates();
+        result.warnings = vec!["  ambiguity ".repeat(20)];
+        let raw_json = serde_json::to_string(&result).expect("result serializes");
+
+        let result = parse_japanese_word_candidates_result_v1(&raw_json)
+            .expect("overlong warning should normalize");
+
+        assert_eq!(result.warnings.len(), 1);
+        assert_eq!(result.warnings[0].chars().count(), 120);
     }
 
     #[test]

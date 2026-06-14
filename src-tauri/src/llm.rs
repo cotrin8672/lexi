@@ -26,10 +26,7 @@ const MAX_OUTPUT_TOKENS: u32 = 2048;
 const TRANSFORM_EVENT: &str = "lexi:transform";
 static NEXT_REQUEST_ID: AtomicU64 = AtomicU64::new(1);
 
-fn finalize_word_study_result(
-    mut result: LexiResultV1,
-    result_language: &str,
-) -> LexiResultV1 {
+fn finalize_word_study_result(mut result: LexiResultV1, result_language: &str) -> LexiResultV1 {
     result.result_language = result_language.trim().to_string();
     result.source_language = "en".to_string();
     result
@@ -1157,7 +1154,7 @@ Field contract:
   - Phrasal-verb style entries are preferred over proverb-like or overly specific fixed expressions.
   - japanese: concise Japanese meaning of that minimal expression, max 64 characters.
   - example: one short natural English example sentence using the idiom, max 120 characters. The example sentence may be longer than the idiom label, but the idiom field itself must stay minimal.
-- warnings: empty unless the input is ambiguous, too short, not a word/phrase, or confidence is low.
+- warnings: empty unless the input is ambiguous, too short, not a word/phrase, or confidence is low. Each warning must be max 120 characters.
 
 Quality rules:
 - Prefer precision over coverage.
@@ -1198,7 +1195,7 @@ Hard requirements:
 - Every candidate must include example.sentence (natural English using that candidate) and example.japanese (its Japanese translation).
 - Keep examples generic; do not quote surrounding selected context.
 - confidence must be exactly "high", "medium", or "low".
-- warnings: empty unless the Japanese query is context-dependent, ambiguous, slang-like, or too short to rank confidently.
+- warnings: empty unless the Japanese query is context-dependent, ambiguous, slang-like, or too short to rank confidently. Each warning must be max 120 characters.
 
 Field contract:
 - term: English lemma or short fixed phrase, max 48 characters.
@@ -1392,7 +1389,7 @@ fn lexi_result_schema(result_language: &str) -> Value {
             "nuance": { "type": "string" },
             "synonyms": { "type": "array", "minItems": 0, "maxItems": 4, "items": { "$ref": "#/$defs/relatedWord" } },
             "idioms": { "type": "array", "minItems": 0, "maxItems": 3, "items": { "$ref": "#/$defs/idiom" } },
-            "warnings": { "type": "array", "items": { "type": "string" } }
+            "warnings": { "type": "array", "items": { "type": "string", "maxLength": 120 } }
         },
         "$defs": {
             "exampleSentence": {
@@ -2176,7 +2173,7 @@ fn lexi_jp_word_candidates_schema() -> Value {
                 "maxItems": 8,
                 "items": { "$ref": "#/$defs/candidate" }
             },
-            "warnings": { "type": "array", "items": { "type": "string" } }
+            "warnings": { "type": "array", "items": { "type": "string", "maxLength": 120 } }
         },
         "$defs": {
             "exampleSentence": {
@@ -2529,8 +2526,8 @@ mod tests {
         TransformRequest,
     };
     use crate::schema::{
-        parse_lexi_result_v1, CandidateConfidence, ExampleSentence, Idiom, Inflection,
-        LexiResultV1, RelatedWord, Translation, LEXI_RESULT_V1_SCHEMA_VERSION,
+        parse_lexi_result_v1, CandidateConfidence, ExampleSentence, LexiResultV1, Translation,
+        LEXI_RESULT_V1_SCHEMA_VERSION,
     };
 
     #[test]
@@ -2742,10 +2739,7 @@ mod tests {
     fn openai_schema_matches_result_validation_cardinality() {
         let schema = lexi_result_schema("ja");
 
-        assert_eq!(
-            schema["properties"]["sourceLanguage"]["enum"][0],
-            "en"
-        );
+        assert_eq!(schema["properties"]["sourceLanguage"]["enum"][0], "en");
         assert_eq!(schema["properties"]["resultLanguage"]["enum"][0], "ja");
         assert_eq!(schema["properties"]["translations"]["minItems"], 1);
         assert_eq!(schema["properties"]["translations"]["maxItems"], 3);
@@ -2791,10 +2785,7 @@ mod tests {
     fn gemini_schema_matches_result_validation_cardinality() {
         let schema = gemini_lexi_result_schema("ja");
 
-        assert_eq!(
-            schema["properties"]["sourceLanguage"]["enum"][0],
-            "en"
-        );
+        assert_eq!(schema["properties"]["sourceLanguage"]["enum"][0], "en");
         assert_eq!(schema["properties"]["resultLanguage"]["enum"][0], "ja");
         assert_eq!(schema["properties"]["translations"]["minItems"], 1);
         assert_eq!(schema["properties"]["translations"]["maxItems"], 3);

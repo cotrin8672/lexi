@@ -8,7 +8,7 @@ use std::os::windows::ffi::OsStringExt;
 use std::sync::{mpsc, Mutex, OnceLock};
 use std::thread;
 use std::time::{Duration, Instant};
-use windows::core::{Interface, BSTR, VARIANT};
+use windows::core::{Interface, BSTR};
 use windows::Win32::Foundation::{CloseHandle, HGLOBAL, HWND, MAX_PATH};
 use windows::Win32::System::Com::{CoCreateInstance, IDataObject, CLSCTX_INPROC_SERVER};
 use windows::Win32::System::DataExchange::{
@@ -24,9 +24,8 @@ use windows::Win32::System::Threading::{
     OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION, PROCESS_VM_READ,
 };
 use windows::Win32::UI::Accessibility::{
-    CUIAutomation, IUIAutomation, IUIAutomationElement, IUIAutomationElementArray,
-    IUIAutomationTextPattern, IUIAutomationTextRangeArray, TreeScope_Descendants,
-    UIA_IsTextPatternAvailablePropertyId, UIA_TextPatternId,
+    CUIAutomation, IUIAutomation, IUIAutomationElement, IUIAutomationTextPattern,
+    IUIAutomationTextRangeArray, UIA_TextPatternId,
 };
 use windows::Win32::UI::Input::KeyboardAndMouse::{
     GetAsyncKeyState, SendInput, INPUT, INPUT_0, INPUT_KEYBOARD, KEYBDINPUT, KEYEVENTF_KEYUP,
@@ -36,8 +35,12 @@ use windows::Win32::UI::WindowsAndMessaging::{
     GetForegroundWindow, GetWindowTextLengthW, GetWindowTextW, GetWindowThreadProcessId,
 };
 
-const CLIPBOARD_COPY_TIMEOUT: Duration = Duration::from_millis(250);
+const CLIPBOARD_COPY_TIMEOUT: Duration = Duration::from_millis(600);
 const CLIPBOARD_RESTORE_TIMEOUT: Duration = Duration::from_millis(300);
+const SELECTION_CAPTURE_TIMEOUT: Duration = Duration::from_millis(2_000);
+const SELECTION_WORKER_STACK_SIZE: usize = 8 * 1024 * 1024;
+const MAX_UIA_DESCENDANT_ELEMENTS: usize = 128;
+const MAX_UIA_DESCENDANT_TEXT_PATTERNS: usize = 16;
 const CF_UNICODETEXT_FORMAT: u32 = 13;
 const POLL_INTERVAL: Duration = Duration::from_millis(10);
 
@@ -216,6 +219,12 @@ impl CaptureBackend for UiaBackend {
     }
 
     fn capture(&mut self, source: &CaptureSource) -> Result<BackendCapture, BackendCaptureError> {
+        if should_skip_uia_fallback(source) {
+            return Err(BackendCaptureError::Recoverable(
+                SelectionCaptureError::SelectionUnsupported,
+            ));
+        }
+
         let focused = unsafe {
             self.automation.GetFocusedElement().map_err(|error| {
                 match classify_windows_error(error.code()) {
@@ -242,6 +251,23 @@ impl CaptureBackend for UiaBackend {
     }
 }
 
+fn should_skip_uia_fallback(source: &CaptureSource) -> bool {
+    let Some(process) = source.source_process.as_deref() else {
+        return false;
+    };
+
+    matches!(
+        process.to_ascii_lowercase().as_str(),
+        "zen.exe"
+            | "firefox.exe"
+            | "chrome.exe"
+            | "msedge.exe"
+            | "brave.exe"
+            | "vivaldi.exe"
+            | "opera.exe"
+    )
+}
+
 fn selection_strategies() -> [Box<dyn SelectionStrategy>; 2] {
     [
         Box::new(FocusedElementStrategy),
@@ -264,11 +290,20 @@ fn request_worker_capture(clipboard_owner: Option<isize>) -> CaptureResult {
         let requests = selection_worker_sender();
         match requests.send(request) {
             Ok(()) => {
-                return response.recv().unwrap_or_else(|_| {
-                    Err(worker_failure(SelectionCaptureError::WindowsApiFailure(
-                        "selection worker stopped before returning capture result".to_string(),
-                    )))
-                });
+                return match response.recv_timeout(SELECTION_CAPTURE_TIMEOUT) {
+                    Ok(result) => result,
+                    Err(mpsc::RecvTimeoutError::Timeout) => {
+                        reset_selection_worker();
+                        Err(worker_failure(SelectionCaptureError::WindowsApiFailure(
+                            "selection capture timed out".to_string(),
+                        )))
+                    }
+                    Err(mpsc::RecvTimeoutError::Disconnected) => {
+                        Err(worker_failure(SelectionCaptureError::WindowsApiFailure(
+                            "selection worker stopped before returning capture result".to_string(),
+                        )))
+                    }
+                };
             }
             Err(error) if attempt == 0 => {
                 reset_selection_worker();
@@ -312,6 +347,7 @@ fn spawn_selection_worker() -> SelectionWorker {
     let (requests, receiver) = mpsc::channel();
     thread::Builder::new()
         .name("lexi-selection-capture".to_string())
+        .stack_size(SELECTION_WORKER_STACK_SIZE)
         .spawn(move || run_selection_worker(receiver))
         .expect("selection worker should start");
 
@@ -726,35 +762,37 @@ fn descendant_text_patterns(
     element: &IUIAutomationElement,
 ) -> Vec<IUIAutomationTextPattern> {
     let mut patterns = Vec::new();
+    let Ok(walker) = (unsafe { automation.ControlViewWalker() }) else {
+        return patterns;
+    };
+    let mut pending = Vec::new();
 
-    if let Ok(descendants) = text_pattern_descendants(automation, element) {
-        if let Ok(length) = unsafe { descendants.Length().map_err(map_windows_error) } {
-            let capped_length = length.min(64);
+    if let Ok(first_child) = unsafe { walker.GetFirstChildElement(element) } {
+        pending.push(first_child);
+    }
 
-            for index in 0..capped_length {
-                let Ok(candidate) = (unsafe { descendants.GetElement(index) }) else {
-                    continue;
-                };
-                if let Ok(pattern) = current_text_pattern(&candidate) {
-                    patterns.push(pattern);
-                }
-            }
+    let mut visited = 0;
+    while let Some(candidate) = pending.pop() {
+        if visited >= MAX_UIA_DESCENDANT_ELEMENTS
+            || patterns.len() >= MAX_UIA_DESCENDANT_TEXT_PATTERNS
+        {
+            break;
+        }
+        visited += 1;
+
+        if let Ok(pattern) = current_text_pattern(&candidate) {
+            patterns.push(pattern);
+        }
+
+        if let Ok(next_sibling) = unsafe { walker.GetNextSiblingElement(&candidate) } {
+            pending.push(next_sibling);
+        }
+        if let Ok(first_child) = unsafe { walker.GetFirstChildElement(&candidate) } {
+            pending.push(first_child);
         }
     }
 
     patterns
-}
-
-fn text_pattern_descendants(
-    automation: &IUIAutomation,
-    element: &IUIAutomationElement,
-) -> Result<IUIAutomationElementArray, SelectionCaptureError> {
-    let condition = text_pattern_available_condition(automation)?;
-    unsafe {
-        element
-            .FindAll(TreeScope_Descendants, &condition)
-            .map_err(map_windows_error)
-    }
 }
 
 fn current_text_pattern(
@@ -769,17 +807,6 @@ fn current_text_pattern(
     pattern
         .cast::<IUIAutomationTextPattern>()
         .map_err(|_| SelectionCaptureError::TextPatternUnavailable)
-}
-
-fn text_pattern_available_condition(
-    automation: &IUIAutomation,
-) -> Result<windows::Win32::UI::Accessibility::IUIAutomationCondition, SelectionCaptureError> {
-    unsafe {
-        let value = VARIANT::from(true);
-        automation
-            .CreatePropertyCondition(UIA_IsTextPatternAvailablePropertyId, &value)
-            .map_err(map_windows_error)
-    }
 }
 
 fn selected_text(pattern: &IUIAutomationTextPattern) -> Result<String, SelectionCaptureError> {
@@ -881,7 +908,8 @@ fn map_windows_error(error: windows::core::Error) -> SelectionCaptureError {
 #[cfg(test)]
 mod tests {
     use super::{
-        finalize_backend_capture, BackendCapture, CaptureSource, SelectionCaptureError, HWND,
+        finalize_backend_capture, should_skip_uia_fallback, BackendCapture, CaptureSource,
+        SelectionCaptureError, HWND,
     };
 
     fn test_source() -> CaptureSource {
@@ -938,5 +966,15 @@ mod tests {
             ));
             assert_eq!(failure.capture_method, Some(method));
         }
+    }
+
+    #[test]
+    fn skips_uia_fallback_for_browser_processes() {
+        let mut source = test_source();
+        source.source_process = Some("Zen.exe".to_string());
+        assert!(should_skip_uia_fallback(&source));
+
+        source.source_process = Some("notepad.exe".to_string());
+        assert!(!should_skip_uia_fallback(&source));
     }
 }
